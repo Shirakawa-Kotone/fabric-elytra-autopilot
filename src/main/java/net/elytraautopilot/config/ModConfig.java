@@ -73,6 +73,9 @@ public class ModConfig {
     public static final boolean elytraAutoSwapDefault = false;
     public static final boolean cameraDecoupledDefault = false;
 
+    // Trajectory prediction defaults
+    public static final boolean trajectoryPredictionDefault = true;
+
     // Obstacle avoidance defaults
     public static final boolean obstacleAvoidanceDefault = true;
     public static final double avoidanceLookaheadDefault = 5.0;
@@ -92,11 +95,11 @@ public class ModConfig {
 
     // Direct landing defaults
     public static final boolean directLandingDefault = true;
-    public static final double directLandingGlideAngleDefault = 20.0;
-    public static final double directLandingMaxAngleDefault = 30.0;
+    public static final double directLandingGlideAngleDefault = 12.0;
+    public static final double directLandingMaxAngleDefault = 20.0;
     public static final double directLandingMinDistanceDefault = 40.0;
-    public static final double directLandingFlareHeightDefault = 20.0;
-    public static final double directLandingFlareAngleDefault = -12.0;
+    public static final double directLandingFlareHeightDefault = 10.0;
+    public static final double directLandingFlareAngleDefault = -5.0;
     public static final double minDirectLandingAngle = 0.0;
     public static final double maxDirectLandingAngle = 80.0;
     public static final double minDirectLandingDistance = 0.0;
@@ -168,6 +171,7 @@ public class ModConfig {
     public boolean cameraDecoupled = cameraDecoupledDefault;
 
     // Obstacle avoidance values
+    public boolean trajectoryPrediction = trajectoryPredictionDefault;
     public boolean obstacleAvoidance = obstacleAvoidanceDefault;
     public double avoidanceLookahead = avoidanceLookaheadDefault;
     public double avoidanceClearance = avoidanceClearanceDefault;
@@ -524,6 +528,16 @@ public class ModConfig {
                                 .controller(opt -> IntegerFieldControllerBuilder.create(opt).min(minCruiseAltitude)
                                         .max(maxCruiseAltitude))
                                 .build())
+                        .build())
+                .category(ConfigCategory.createBuilder()
+                        .name(Component.translatable("config.elytraautopilot.trajectory"))
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.trajectory.prediction"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.trajectory.prediction.desc")))
+                                .binding(trajectoryPredictionDefault, () -> ModConfig.INSTANCE.trajectoryPrediction,
+                                        newVal -> ModConfig.INSTANCE.trajectoryPrediction = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
                         .build())
                 .category(ConfigCategory.createBuilder()
                         .name(Component.translatable("config.elytraautopilot.avoidance"))

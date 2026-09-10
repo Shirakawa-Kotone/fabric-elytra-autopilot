@@ -5,6 +5,7 @@ import net.elytraautopilot.config.ModConfig;
 import net.elytraautopilot.strategy.FlightPhase;
 import net.elytraautopilot.strategy.FlightStrategy;
 import net.elytraautopilot.utils.ElytraManager;
+import net.elytraautopilot.utils.ElytraTrajectory;
 import net.elytraautopilot.utils.FreeCameraState;
 import net.elytraautopilot.utils.Hud;
 import net.elytraautopilot.utils.HudRenderer;
@@ -83,6 +84,18 @@ public class ElytraAutoPilot implements ClientModInitializer {
      * landing.
      */
     private static final double DIRECT_LANDING_ENTRY_MARGIN = 5.0;
+    /**
+     * Steepest attitude the approach solver may command. The attitude needed to
+     * descend is far larger than the descent angle itself.
+     */
+    private static final double DIRECT_LANDING_MAX_ATTITUDE = 80.0;
+    /**
+     * Horizon used to measure what an attitude actually descends at, in ticks. The
+     * measurement stops at the ground, so this is only an upper bound.
+     */
+    private static final int DIRECT_LANDING_SOLVER_TICKS = 120;
+    /** Bisection steps used to invert the elytra movement model. */
+    private static final int DIRECT_LANDING_SOLVER_ITERATIONS = 9;
 
     /** Cached result of the straight-in landing path check for the current tick. */
     private static int directLandingCheckTick = Integer.MIN_VALUE;
@@ -764,6 +777,46 @@ public class ElytraAutoPilot implements ClientModInitializer {
     }
 
     /**
+     * Attitude the straight-in approach should hold right now.
+     *
+     * <p>
+     * The wanted descent angle comes from the geometry, but it cannot be used as an
+     * attitude directly: measured with the vanilla movement model, a 30 degree
+     * nose-down attitude only descends at about 9 degrees at cruise speed. Holding
+     * the geometric angle would therefore undershoot the descent badly and fly far
+     * past the landing spot, so the attitude is found by inverting the movement
+     * model instead.
+     */
+    private static double directLandingAimAngle(Player player) {
+        double wanted = isflytoActive ? directLandingAngle(player) : preferredGlideAngle();
+        wanted = Mth.clamp(wanted, 0.0, ModConfig.INSTANCE.directLandingMaxAngle);
+        if (!ModConfig.INSTANCE.trajectoryPrediction) {
+            // Without the physics model the attitude is all we can guess.
+            return wanted;
+        }
+        return solveAttitude(player, wanted);
+    }
+
+    /**
+     * Finds the attitude whose predicted flight path descends at the wanted angle.
+     * The relationship is monotonic - more nose down descends more steeply - so a
+     * bisection over the attitude range converges in a few cheap simulations.
+     */
+    private static float solveAttitude(Player player, double wantedPathAngle) {
+        double low = -Math.min(25.0, ModConfig.INSTANCE.avoidanceMaxClimbAngle);
+        double high = DIRECT_LANDING_MAX_ATTITUDE;
+        for (int i = 0; i < DIRECT_LANDING_SOLVER_ITERATIONS; i++) {
+            double middle = (low + high) / 2.0;
+            if (ElytraTrajectory.descentAngle(player, (float) middle, DIRECT_LANDING_SOLVER_TICKS) < wantedPathAngle) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return (float) ((low + high) / 2.0);
+    }
+
+    /**
      * True when the glide path towards the landing spot is not blocked by terrain.
      * The answer only depends on the aircraft's position, so it is cached for the
      * current tick: the flight controllers run once per frame but the world only
@@ -787,10 +840,10 @@ public class ElytraAutoPilot implements ClientModInitializer {
             return true;
         }
         float yaw = isflytoActive ? bearingToTarget(player) : player.getYRot();
-        double angle = Mth.clamp(directLandingAngle(player), 0.0, ModConfig.INSTANCE.directLandingMaxAngle + 5.0);
-        // The ray is expected to hit the ground right at the landing spot, so
-        // only terrain that blocks the approach early counts as an obstacle.
-        return ObstacleAvoidance.landingPathClearance(player, yaw, angle, checkLength) >= checkLength * 0.7;
+        double angle = Mth.clamp(directLandingAimAngle(player), 0.0, ModConfig.INSTANCE.directLandingMaxAngle + 5.0);
+        // The path is meant to end on the ground at the landing spot, so only
+        // terrain that shows up well before it counts as blocking.
+        return ObstacleAvoidance.landingCorridorClear(player, yaw, angle, checkLength);
     }
 
     /**
@@ -853,8 +906,8 @@ public class ElytraAutoPilot implements ClientModInitializer {
             steerTowards(player, bearingToTarget(player), speedMod);
         }
 
-        double target = Mth.clamp(directLandingAngle(player), -ModConfig.INSTANCE.avoidanceMaxClimbAngle,
-                ModConfig.INSTANCE.directLandingMaxAngle);
+        double target = Mth.clamp(directLandingAimAngle(player), -ModConfig.INSTANCE.avoidanceMaxClimbAngle,
+                DIRECT_LANDING_MAX_ATTITUDE);
 
         // Flare: bleed speed and soften the touchdown as the ground comes up.
         double flareHeight = ModConfig.INSTANCE.directLandingFlareHeight;

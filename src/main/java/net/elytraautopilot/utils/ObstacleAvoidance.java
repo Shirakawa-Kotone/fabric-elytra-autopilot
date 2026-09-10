@@ -13,8 +13,16 @@ import net.minecraft.world.phys.Vec3;
  * Forward-looking terrain and obstacle detection for the elytra autopilot.
  *
  * <p>
- * Every client tick a small fan of ray casts is fired along the flight path. If
- * the path is blocked, the smallest pitch change that clears the obstacle is
+ * Every client tick the flight path is examined. By default the path is
+ * <em>predicted</em> with the vanilla elytra physics (see
+ * {@link ElytraTrajectory}), so the aircraft sees where it would really go - a
+ * level attitude still sinks, a pull-up trades speed for height - instead of
+ * assuming it keeps flying in a straight line. With
+ * {@code trajectoryPrediction} disabled a fan of ray casts along the current
+ * heading is used instead.
+ *
+ * <p>
+ * If the path is blocked, the smallest pitch change that clears the obstacle is
  * selected by pitching the nose up (the preferred escape) or, when there is no
  * usable climb - for example underneath a Nether ceiling - by pitching the nose
  * down.
@@ -62,6 +70,14 @@ public final class ObstacleAvoidance {
     /** Lateral half-width of the ray fan, capped in degrees. */
     private static final double MIN_FAN_ANGLE = 1.0;
     private static final double MAX_FAN_ANGLE = 12.0;
+    /** Evaluator result meaning "nothing is in the way". */
+    private static final double CLEAR = Double.MAX_VALUE;
+
+    /** Scores an attitude by how far it flies before hitting terrain. */
+    private interface EscapeEvaluator {
+        /** Distance flown before impact, or {@link #CLEAR} when the path is clear. */
+        double evaluate(float pitch);
+    }
 
     private static Action action = Action.NONE;
     private static float targetPitch = 0.0f;
@@ -110,71 +126,105 @@ public final class ObstacleAvoidance {
         }
         lookaheadDistance = lookahead;
 
+        if (ModConfig.INSTANCE.trajectoryPrediction) {
+            tickPredicted(player, lookahead);
+        } else {
+            tickRaycast(level, player, lookahead);
+        }
+    }
+
+    /**
+     * Scores attitudes by flying them with the vanilla elytra physics and checking
+     * the resulting path for terrain.
+     */
+    private static void tickPredicted(Player player, double lookahead) {
+        float pitch = player.getXRot();
+        double clearance = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
+        ElytraTrajectory.Result current = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, lookahead,
+                clearance);
+        if (current.isClear()) {
+            // The path the aircraft is actually flying is clear.
+            return;
+        }
+        obstacleDistance = current.travelledDistance;
+
+        searchEscape(pitch, candidate -> {
+            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, candidate, ElytraTrajectory.MAX_TICKS,
+                    lookahead, clearance);
+            return result.isClear() ? CLEAR : result.travelledDistance;
+        });
+    }
+
+    /** Scores attitudes with a fan of ray casts along the current heading. */
+    private static void tickRaycast(Level level, Player player, double lookahead) {
         Vec3 origin = player.getEyePosition().subtract(0.0, 0.5, 0.0);
         float yaw = player.getYRot();
         float pitch = player.getXRot();
 
         double currentClearance = clearance(level, player, origin, yaw, pitch, lookahead);
         if (currentClearance >= lookahead) {
-            // The path is already clear - leave the flight controls alone.
             return;
         }
         obstacleDistance = currentClearance;
 
-        // 1) Pull up. The shallowest climb that fully clears the obstacle wins,
-        // so the aircraft deviates as little as possible.
-        double bestClimbPitch = Double.NaN;
-        double bestClimbClearance = -1.0;
+        searchEscape(pitch, candidate -> {
+            double candidateClearance = clearance(level, player, origin, yaw, candidate, lookahead);
+            return candidateClearance >= lookahead ? CLEAR : candidateClearance;
+        });
+    }
+
+    /**
+     * Shared escape search: the shallowest climb that clears the obstacle wins,
+     * then a descent, then whatever flies furthest. Climbing is always preferred.
+     */
+    private static void searchEscape(float currentPitch, EscapeEvaluator evaluator) {
+        // 1) Pull up.
         double maxClimb = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxClimbAngle, 0.0, 85.0);
+        double bestClimbPitch = Double.NaN;
+        double bestClimbDistance = -1.0;
         for (double delta = SEARCH_STEP; delta <= maxClimb + 1.0e-6; delta += SEARCH_STEP) {
-            float candidate = (float) (pitch - delta);
+            float candidate = (float) (currentPitch - delta);
             if (candidate < -89.0f) {
                 break;
             }
-            double candidateClearance = clearance(level, player, origin, yaw, candidate, lookahead);
-            if (candidateClearance > bestClimbClearance) {
-                bestClimbClearance = candidateClearance;
+            double distance = evaluator.evaluate(candidate);
+            if (distance == CLEAR) {
+                set(Action.CLIMB, candidate);
+                return;
+            }
+            if (distance > bestClimbDistance) {
+                bestClimbDistance = distance;
                 bestClimbPitch = candidate;
             }
-            if (candidateClearance >= lookahead) {
-                break;
-            }
-        }
-        if (bestClimbClearance >= lookahead) {
-            set(Action.CLIMB, bestClimbPitch);
-            return;
         }
 
         // 2) Nothing to climb over (or the ceiling is too low): dive under it.
-        double bestDescentPitch = Double.NaN;
-        double bestDescentClearance = -1.0;
         double maxDescent = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxDescentAngle, 0.0, 85.0);
+        double bestDescentPitch = Double.NaN;
+        double bestDescentDistance = -1.0;
         for (double delta = SEARCH_STEP; delta <= maxDescent + 1.0e-6; delta += SEARCH_STEP) {
-            float candidate = (float) (pitch + delta);
+            float candidate = (float) (currentPitch + delta);
             if (candidate > 89.0f) {
                 break;
             }
-            double candidateClearance = clearance(level, player, origin, yaw, candidate, lookahead);
-            if (candidateClearance > bestDescentClearance) {
-                bestDescentClearance = candidateClearance;
+            double distance = evaluator.evaluate(candidate);
+            if (distance == CLEAR) {
+                set(Action.DESCEND, candidate);
+                return;
+            }
+            if (distance > bestDescentDistance) {
+                bestDescentDistance = distance;
                 bestDescentPitch = candidate;
             }
-            if (candidateClearance >= lookahead) {
-                break;
-            }
-        }
-        if (bestDescentClearance >= lookahead) {
-            set(Action.DESCEND, bestDescentPitch);
-            return;
         }
 
         // 3) Boxed in: keep whatever buys the most room, still preferring a climb.
-        if (!Double.isNaN(bestClimbPitch) && bestClimbClearance >= bestDescentClearance) {
+        if (!Double.isNaN(bestClimbPitch) && bestClimbDistance >= bestDescentDistance) {
             set(Action.CLIMB, bestClimbPitch);
         } else if (!Double.isNaN(bestDescentPitch)) {
             set(Action.DESCEND, bestDescentPitch);
         } else {
-            set(Action.EVADE, pitch);
+            set(Action.EVADE, currentPitch);
         }
     }
 
@@ -182,6 +232,29 @@ public final class ObstacleAvoidance {
         action = newAction;
         targetPitch = Mth.clamp((float) pitch, -90.0f, 90.0f);
         active = newAction != Action.NONE;
+    }
+
+    /**
+     * True when a straight-in approach at the given attitude reaches (or gets close
+     * to) the landing spot instead of hitting terrain on the way, using either the
+     * predicted flight path or, when prediction is disabled, a ray along the
+     * approach.
+     */
+    public static boolean landingCorridorClear(Player player, float yaw, double pitchDegrees, double pathLength) {
+        if (player == null || pathLength <= 0.0) {
+            return true;
+        }
+        if (ModConfig.INSTANCE.trajectoryPrediction) {
+            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, (float) pitchDegrees,
+                    ElytraTrajectory.MAX_TICKS, pathLength, ModConfig.INSTANCE.avoidanceClearance);
+            if (!result.collision) {
+                return true;
+            }
+            // The path is meant to end on the ground at the landing spot; only
+            // terrain that shows up well before it counts as blocking.
+            return result.travelledDistance >= pathLength * 0.7;
+        }
+        return landingPathClearance(player, yaw, pitchDegrees, pathLength) >= pathLength * 0.7;
     }
 
     /**

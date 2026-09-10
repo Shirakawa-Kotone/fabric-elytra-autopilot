@@ -32,11 +32,22 @@ Use this command to add or remove quick fly locations.
 
 While flying, use this command to force a landing at any time. Useful for quickly returning to the ground!
 
+### Trajectory Prediction
+Enabled by default under **Trajectory Prediction**. The mod does not extend your current heading in a straight line to decide where you are going: it integrates the vanilla elytra movement code (`LivingEntity.updateFallFlyingMovement`) tick by tick from your current position and velocity. That matters, because on an elytra the attitude is not the flight path angle - measured with this model, a **30° nose-down attitude only descends at about 9°** at cruise speed, and a nose-up attitude bleeds speed until it stops climbing. A straight-line guess therefore both misses terrain below the path and mis-aims every descent.
+
+Both systems below use that prediction. Turning the option off falls back to the simpler ray/geometric behaviour.
+
 ### Obstacle Avoidance
-Enabled by default and configurable under **Obstacle Avoidance** in the config screen. While Auto Flight is running, the mod looks along the flight path with a fan of ray casts (5 seconds of flight by default). If terrain is in the way it pitches the nose **up** towards the shallowest climb that clears the obstacle; if there is nothing to climb over - for example underneath a Nether ceiling - it pitches the nose **down** instead. The HUD shows what it is doing (`Avoiding terrain: climbing (74 blocks ahead)`). Turn it off, shorten the look-ahead time, change the safety clearance or limit the climb/descent angles if you prefer.
+Enabled by default and configurable under **Obstacle Avoidance** in the config screen. While Auto Flight is running the mod flies the predicted path ahead (5 seconds of flight by default) and, if it ends in terrain, searches for an escape attitude by simulating each candidate with the same model. It pitches the nose **up** towards the shallowest climb that actually clears the obstacle; if there is nothing to climb over - for example underneath a Nether ceiling - it pitches the nose **down** instead. The HUD shows what it is doing (`Avoiding terrain: climbing (74 blocks ahead)`).
+
+Note that a pitch-only escape is limited by physics: from cruise speed an elytra cannot climb very steeply without first trading speed for height, so a wall that rears up immediately in front may be unavoidable by pitching alone.
 
 ### Landing
-`/flyto` and `/land` normally lose height by circling around the target. With **Direct Landing** enabled (default) the mod instead checks whether the destination can be reached in a straight line: the required descent angle has to be within the configured glide/max angle, there has to be enough horizontal room, and the approach corridor must be free of terrain. If all of that holds, the aircraft flies straight in, tracks the glide path and flares shortly before touchdown. If the approach is too steep or blocked, or if the path becomes blocked while descending, it falls back to the original circling descent - so nothing is lost when there is not enough space.
+`/flyto` and `/land` normally lose height by circling around the target. With **Direct Landing** enabled (default) the mod instead checks whether the destination can be reached in a straight line: the required descent angle has to be within the configured glide/max angle, there has to be enough horizontal room, and the predicted approach must not run into terrain. If all of that holds, the aircraft flies straight in and flares shortly before touchdown.
+
+The attitude used for the descent is not the geometric angle - it is solved by inverting the movement model (a bisection on "what attitude actually descends at this angle", measured by simulation). With the default settings a straight-in approach touches down within roughly 30 blocks of the destination with a vertical speed under 10 m/s, which is inside the range where vanilla clamps fall distance.
+
+If the approach is too steep or blocked, or if the path becomes blocked while descending, it falls back to the original circling descent - so nothing is lost when there is not enough space.
 
 Useful settings for this live under **Flight Profile**: `Direct Landing`, `Direct Landing Glide Angle` (the descent angle a manual `/land` aims for), `Direct Landing Max Angle` (steepest allowed straight-in approach), `Direct Landing Min Distance`, `Direct Landing Flare Height` and `Direct Landing Flare Angle`.
 
