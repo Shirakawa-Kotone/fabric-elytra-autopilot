@@ -479,11 +479,12 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     tick = cruiseTick;
                 }
                 double angle = strategy.angleAt(tick);
-                player.setXRot((float) Math.max(-90.0, Math.min(90.0, -angle)));
-
-                // Obstacle avoidance overrides the precomputed waveform
                 if (ObstacleAvoidance.isActive()) {
+                    // Obstacle avoidance owns the pitch channel until the path is
+                    // clear again, so the waveform cannot pull the nose back down.
                     ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate);
+                } else {
+                    player.setXRot((float) Math.max(-90.0, Math.min(90.0, -angle)));
                 }
 
                 // Advance the waveform tick index
