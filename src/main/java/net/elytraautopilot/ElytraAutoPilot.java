@@ -9,6 +9,7 @@ import net.elytraautopilot.utils.FreeCameraState;
 import net.elytraautopilot.utils.Hud;
 import net.elytraautopilot.utils.HudRenderer;
 import net.elytraautopilot.utils.KeyBindings;
+import net.elytraautopilot.utils.ObstacleAvoidance;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -27,6 +28,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,10 +66,23 @@ public class ElytraAutoPilot implements ClientModInitializer {
     public static boolean isflytoActive = false;
     public static boolean forceLand = false;
     public static boolean isLanding = false;
+    public static boolean directLanding = false;
     public static float GLIDE_ANGLE = 0.0f;
     public static boolean doGlide = false;
     public static double distance = 0f;
     public static double groundheight;
+
+    /**
+     * How far ahead a straight-in landing path is checked for terrain, in blocks.
+     */
+    private static final double MAX_DIRECT_LANDING_CHECK = 220.0;
+    /** Extra descent angle tolerated before giving up on a straight-in landing. */
+    private static final double DIRECT_LANDING_ANGLE_HYSTERESIS = 12.0;
+    /**
+     * Margin below the maximum angle required before starting a straight-in
+     * landing.
+     */
+    private static final double DIRECT_LANDING_ENTRY_MARGIN = 5.0;
 
     // Strategy mode fields
     private static FlightStrategy climbStrategy;
@@ -193,6 +208,9 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 }
                 FreeCameraState.init();
                 if (isChained) {
+                    isLanding = false;
+                    forceLand = false;
+                    directLanding = false;
                     isflytoActive = true;
                     isChained = false;
                     minecraftClient.player
@@ -276,42 +294,51 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     if (!forceLand && !ModConfig.INSTANCE.autoLanding) {
                         isflytoActive = false;
                         isLanding = false;
+                        directLanding = false;
                         return;
                     }
                     isDescending = true;
-                    if (ModConfig.INSTANCE.riskyLanding && groundheight > 60) {
-                        riskyLanding(player, speedMod);
+                    if (updateDirectLanding(player)) {
+                        // There is enough room for a straight-in landing: keep the
+                        // nose pointed at the landing spot instead of circling down.
+                        directLanding = true;
+                        directLandingApproach(player, speedMod);
                     } else {
-                        smoothLanding(player, speedMod);
+                        // Not enough room (too steep, or terrain in the way): fall
+                        // back to the original rotating descent.
+                        directLanding = false;
+                        if (ModConfig.INSTANCE.riskyLanding && groundheight > 60) {
+                            riskyLanding(player, speedMod);
+                        } else {
+                            smoothLanding(player, speedMod);
+                        }
                     }
                 } else {
                     Vec3 playerPosition = player.position();
                     double f = (double) argXpos - playerPosition.x;
                     double d = (double) argZpos - playerPosition.z;
-                    float targetYaw = Mth.wrapDegrees((float) (Mth.atan2(d, f) * 57.2957763671875D) - 90.0F);
-                    float yaw = Mth.wrapDegrees(player.getYRot());
-                    if (Math.abs(yaw - targetYaw) < ModConfig.INSTANCE.turningSpeed * 2 * speedMod)
-                        player.setYRot(targetYaw);
-                    else {
-                        if (yaw < targetYaw)
-                            player.setYRot((float) (yaw + ModConfig.INSTANCE.turningSpeed * speedMod));
-                        if (yaw > targetYaw)
-                            player.setYRot((float) (yaw - ModConfig.INSTANCE.turningSpeed * speedMod));
-                    }
+                    steerTowards(player, bearingToTarget(player), speedMod);
                     distance = Math.sqrt(f * f + d * d);
-                    if (distance < 20) {
-                        minecraftClient.player.sendOverlayMessage(
-                                Component.translatable("text.elytraautopilot.landing").withStyle(ChatFormatting.BLUE));
-                        SoundEvent soundEvent = SoundEvent
-                                .createVariableRangeEvent(Identifier.parse(ModConfig.INSTANCE.playSoundOnLanding));
-                        player.playSound(soundEvent, 1.3f, 1f);
+                    if (canStartDirectLanding(player)) {
+                        // Start the descent while there is still room to do it in a
+                        // straight line instead of flying level and then circling.
+                        announceLanding(player);
+                        player.sendOverlayMessage(Component.translatable("text.elytraautopilot.directLanding")
+                                .withStyle(ChatFormatting.GREEN));
                         isLanding = true;
+                        directLanding = true;
+                        directLandingApproach(player, speedMod);
+                    } else if (distance < 20) {
+                        announceLanding(player);
+                        isLanding = true;
+                        directLanding = false;
                     }
                 }
             }
             // Flight pitch behavior (classic mode only — strategy mode controls
-            // pitch in onClientTick at 20 TPS)
-            if (pullUp && !(isLanding || forceLand) && !strategyActive) {
+            // pitch in onClientTick at 20 TPS). Obstacle avoidance always wins.
+            boolean obstacleAvoidance = ObstacleAvoidance.isActive();
+            if (pullUp && !(isLanding || forceLand) && !strategyActive && !obstacleAvoidance) {
                 player.setXRot((float) (pitch - ModConfig.INSTANCE.pullUpSpeed * speedMod));
                 pitch = player.getXRot();
                 if (pitch <= ModConfig.INSTANCE.pullUpAngle) {
@@ -320,7 +347,7 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 // Powered flight behavior
                 minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
             }
-            if (pullDown && !(isLanding || forceLand) && !strategyActive) {
+            if (pullDown && !(isLanding || forceLand) && !strategyActive && !obstacleAvoidance) {
                 player.setXRot((float) (pitch + ModConfig.INSTANCE.pullDownSpeed * pitchMod * speedMod));
                 pitch = player.getXRot();
                 if (pitch >= ModConfig.INSTANCE.pullDownAngle) {
@@ -329,16 +356,24 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 // Powered flight behavior
                 minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
             }
+            if (obstacleAvoidance) {
+                ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate * speedMod / 3.0);
+                pitch = player.getXRot();
+                minecraftClient.options.keyUse
+                        .setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f && pitch < -10f);
+            }
         } else {
             velHigh = 0f;
             velLow = 0f;
             isLanding = false;
             forceLand = false;
             isflytoActive = false;
+            directLanding = false;
             pullUp = false;
             pitchMod = 1f;
             pullDown = false;
             strategyActive = false;
+            ObstacleAvoidance.clear();
             FreeCameraState.reset();
         }
     }
@@ -393,8 +428,26 @@ public class ElytraAutoPilot implements ClientModInitializer {
             if (player.isInWater() || player.isInLava()) {
                 isflytoActive = false;
                 isLanding = false;
+                directLanding = false;
+                ObstacleAvoidance.clear();
                 autoFlight = false;
                 return;
+            }
+
+            // Look for terrain in the flight path before the controllers run.
+            // Landings handle the ground themselves, so avoidance only takes part
+            // while cruising and during a straight-in approach - and there it is
+            // shortened so the intended touchdown point is not seen as an obstacle.
+            if (!onTakeoff && (!(isLanding || forceLand) || directLanding)) {
+                double lookaheadCap = Double.MAX_VALUE;
+                if (directLanding) {
+                    double pathLength = Math.hypot(directLandingDistance(player),
+                            Math.max(directLandingHeight(player), 0.0));
+                    lookaheadCap = pathLength * 0.7;
+                }
+                ObstacleAvoidance.tick(player, currentVelocity, lookaheadCap);
+            } else {
+                ObstacleAvoidance.clear();
             }
 
             if (ModConfig.INSTANCE.strategyMode && climbStrategy != null && cruiseStrategy != null && !onTakeoff
@@ -423,6 +476,11 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 }
                 double angle = strategy.angleAt(tick);
                 player.setXRot((float) Math.max(-90.0, Math.min(90.0, -angle)));
+
+                // Obstacle avoidance overrides the precomputed waveform
+                if (ObstacleAvoidance.isActive()) {
+                    ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate);
+                }
 
                 // Advance the waveform tick index
                 if (strategyPhase == FlightPhase.CLIMB) {
@@ -615,6 +673,188 @@ public class ElytraAutoPilot implements ClientModInitializer {
         if (pitch >= fallPitch) {
             player.setXRot(fallPitch);
         }
+    }
+
+    /**
+     * Turns the aircraft towards a heading at the configured turning speed, taking
+     * the short way around.
+     */
+    private void steerTowards(Player player, float targetYawDegrees, double speedMod) {
+        float yaw = Mth.wrapDegrees(player.getYRot());
+        float difference = Mth.wrapDegrees(Mth.wrapDegrees(targetYawDegrees) - yaw);
+        double rate = ModConfig.INSTANCE.turningSpeed * speedMod;
+        if (Math.abs(difference) < rate * 2.0) {
+            player.setYRot(Mth.wrapDegrees(targetYawDegrees));
+        } else {
+            player.setYRot(yaw + (float) Math.copySign(rate, difference));
+        }
+    }
+
+    /** Heading from the aircraft to the current fly-to destination. */
+    private static float bearingToTarget(Player player) {
+        Vec3 position = player.position();
+        double f = (double) argXpos - position.x;
+        double d = (double) argZpos - position.z;
+        return Mth.wrapDegrees((float) (Mth.atan2(d, f) * 57.2957763671875D) - 90.0F);
+    }
+
+    private void announceLanding(Player player) {
+        player.sendOverlayMessage(
+                Component.translatable("text.elytraautopilot.landing").withStyle(ChatFormatting.BLUE));
+        SoundEvent soundEvent = SoundEvent
+                .createVariableRangeEvent(Identifier.parse(ModConfig.INSTANCE.playSoundOnLanding));
+        player.playSound(soundEvent, 1.3f, 1f);
+    }
+
+    /** Height of the terrain at the fly-to destination, when it is known. */
+    private static double targetGroundY(Player player) {
+        Level level = player.level();
+        if (level.isLoaded(new BlockPos(argXpos, 0, argZpos))) {
+            return level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, argXpos, argZpos);
+        }
+        // The destination chunk is not loaded yet: use the terrain underneath
+        // the aircraft as a first guess until the real height is available.
+        return player.position().y - groundheight;
+    }
+
+    /** Height the aircraft still has to lose before touchdown. */
+    private static double directLandingHeight(Player player) {
+        if (isflytoActive) {
+            return player.position().y - targetGroundY(player);
+        }
+        return groundheight;
+    }
+
+    /**
+     * Horizontal room available for the descent: the distance to the destination,
+     * or - for a manual landing without a destination - the distance needed to lose
+     * the remaining height at the preferred glide angle.
+     */
+    private static double directLandingDistance(Player player) {
+        if (isflytoActive) {
+            Vec3 position = player.position();
+            double f = (double) argXpos - position.x;
+            double d = (double) argZpos - position.z;
+            return Math.sqrt(f * f + d * d);
+        }
+        double glide = Math.toRadians(preferredGlideAngle());
+        return Math.max(0.0, directLandingHeight(player)) / Math.tan(glide);
+    }
+
+    /**
+     * Descent angle a straight-in landing aims for, kept within the angle limit.
+     */
+    private static double preferredGlideAngle() {
+        return Mth.clamp(ModConfig.INSTANCE.directLandingGlideAngle, 1.0,
+                Math.max(1.0, ModConfig.INSTANCE.directLandingMaxAngle));
+    }
+
+    /** Descent angle needed to reach the landing spot from the current position. */
+    private static double directLandingAngle(Player player) {
+        double height = directLandingHeight(player);
+        if (height <= 0.0) {
+            return 0.0;
+        }
+        return Math.toDegrees(Math.atan2(height, Math.max(directLandingDistance(player), 1.0)));
+    }
+
+    /**
+     * True when the glide path towards the landing spot is not blocked by terrain.
+     */
+    private static boolean directLandingPathClear(Player player) {
+        double height = Math.max(directLandingHeight(player), 0.0);
+        double pathLength = Math.hypot(directLandingDistance(player), height);
+        double checkLength = Math.min(pathLength, MAX_DIRECT_LANDING_CHECK);
+        if (checkLength < 8.0) {
+            return true;
+        }
+        float yaw = isflytoActive ? bearingToTarget(player) : player.getYRot();
+        double angle = Mth.clamp(directLandingAngle(player), 0.0, ModConfig.INSTANCE.directLandingMaxAngle + 5.0);
+        // The ray is expected to hit the ground right at the landing spot, so
+        // only terrain that blocks the approach early counts as an obstacle.
+        return ObstacleAvoidance.landingPathClearance(player, yaw, angle, checkLength) >= checkLength * 0.7;
+    }
+
+    /**
+     * Can a straight-in landing be started right now?
+     *
+     * <p>
+     * The descent only starts once the destination is close enough for the required
+     * glide path to have reached the preferred glide angle, so a normal cruise is
+     * not turned into one long shallow descent: the circling descent is only
+     * replaced once the aircraft is actually on approach.
+     */
+    private static boolean canStartDirectLanding(Player player) {
+        if (!ModConfig.INSTANCE.directLanding) {
+            return false;
+        }
+        if (directLandingHeight(player) < 4.0) {
+            return false;
+        }
+        if (directLandingDistance(player) < ModConfig.INSTANCE.directLandingMinDistance) {
+            return false;
+        }
+        double angle = directLandingAngle(player);
+        double glide = preferredGlideAngle();
+        double lowestEntry = Math.max(0.0, glide - DIRECT_LANDING_ENTRY_MARGIN);
+        double highestEntry = Math.max(lowestEntry,
+                ModConfig.INSTANCE.directLandingMaxAngle - DIRECT_LANDING_ENTRY_MARGIN);
+        if (angle < lowestEntry || angle > highestEntry) {
+            return false;
+        }
+        return directLandingPathClear(player);
+    }
+
+    /**
+     * Keeps a straight-in landing going while it is still safe, and gives up
+     * (falling back to the circling descent) when it is not.
+     */
+    private static boolean updateDirectLanding(Player player) {
+        if (!ModConfig.INSTANCE.directLanding) {
+            return false;
+        }
+        if (!directLanding) {
+            return canStartDirectLanding(player);
+        }
+        if (directLandingHeight(player) < 2.0) {
+            // Settling onto the ground: keep flying the flare.
+            return true;
+        }
+        if (directLandingAngle(player) > ModConfig.INSTANCE.directLandingMaxAngle + DIRECT_LANDING_ANGLE_HYSTERESIS) {
+            return false;
+        }
+        return directLandingPathClear(player);
+    }
+
+    /**
+     * Flies a straight-in approach: hold the heading towards the landing spot,
+     * track the glide path and flare shortly before touchdown.
+     */
+    private void directLandingApproach(Player player, double speedMod) {
+        if (isflytoActive) {
+            steerTowards(player, bearingToTarget(player), speedMod);
+        }
+
+        double target = Mth.clamp(directLandingAngle(player), -ModConfig.INSTANCE.avoidanceMaxClimbAngle,
+                ModConfig.INSTANCE.directLandingMaxAngle);
+
+        // Flare: bleed speed and soften the touchdown as the ground comes up.
+        double flareHeight = ModConfig.INSTANCE.directLandingFlareHeight;
+        if (flareHeight > 0.0 && groundheight < flareHeight) {
+            double blend = 1.0 - Mth.clamp(groundheight / flareHeight, 0.0, 1.0);
+            target = Mth.lerp(blend, target, ModConfig.INSTANCE.directLandingFlareAngle);
+        }
+
+        double maxChange = Math.max(0.05, ModConfig.INSTANCE.avoidancePitchRate * speedMod / 3.0);
+        float pitch = player.getXRot();
+        float difference = (float) (target - pitch);
+        if (Math.abs(difference) <= maxChange) {
+            player.setXRot((float) target);
+        } else {
+            player.setXRot((float) (pitch + Math.copySign(maxChange, difference)));
+        }
+        pitchMod = 1f;
+        minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
     }
 
     private void riskyLanding(Player player, double speedMod) {

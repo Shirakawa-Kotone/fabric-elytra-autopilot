@@ -73,6 +73,9 @@ public class ClientCommands {
                                                             "X");
                                                     ElytraAutoPilot.argZpos = IntegerArgumentType.getInteger(context,
                                                             "Z");
+                                                    ElytraAutoPilot.isLanding = false;
+                                                    ElytraAutoPilot.forceLand = false;
+                                                    ElytraAutoPilot.directLanding = false;
                                                     ElytraAutoPilot.isflytoActive = true;
                                                     ElytraAutoPilot.pitchMod = 3f;
                                                     FreeCameraState.init();
@@ -271,6 +274,9 @@ public class ClientCommands {
                 ElytraAutoPilot.autoFlight = true;
                 ElytraAutoPilot.argXpos = location.X;
                 ElytraAutoPilot.argZpos = location.Z;
+                ElytraAutoPilot.isLanding = false;
+                ElytraAutoPilot.forceLand = false;
+                ElytraAutoPilot.directLanding = false;
                 ElytraAutoPilot.isflytoActive = true;
                 ElytraAutoPilot.pitchMod = 3f;
                 FreeCameraState.init();

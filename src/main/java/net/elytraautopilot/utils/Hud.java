@@ -250,15 +250,28 @@ public class Hud {
                                             : ChatFormatting.RED)));
                 }
                 if (isLanding && ModConfig.INSTANCE.showLandingStatus) {
-                    lines.add(Component.translatable("text.elytraautopilot.hud.landing")
-                            .withStyle(ChatFormatting.LIGHT_PURPLE));
+                    lines.add(
+                            Component
+                                    .translatable(directLanding
+                                            ? "text.elytraautopilot.hud.directLanding"
+                                            : "text.elytraautopilot.hud.landing")
+                                    .withStyle(ChatFormatting.LIGHT_PURPLE));
                 }
             }
 
             if (forceLand && ModConfig.INSTANCE.showLandingStatus) {
                 // Override or add a “forced landing” indicator
-                lines.add(Component.translatable("text.elytraautopilot.hud.landing")
+                lines.add(Component.translatable(
+                        directLanding ? "text.elytraautopilot.hud.directLanding" : "text.elytraautopilot.hud.landing")
                         .withStyle(ChatFormatting.LIGHT_PURPLE));
+            }
+
+            if (ModConfig.INSTANCE.showAvoidanceStatus && ObstacleAvoidance.isActive()) {
+                lines.add(Component
+                        .translatable("text.elytraautopilot.hud.avoidance",
+                                Component.translatable(ObstacleAvoidance.getAction().translationKey()),
+                                String.format("%.0f", ObstacleAvoidance.getObstacleDistance()))
+                        .withStyle(ChatFormatting.RED));
             }
 
             // Finally, turn the list into your array

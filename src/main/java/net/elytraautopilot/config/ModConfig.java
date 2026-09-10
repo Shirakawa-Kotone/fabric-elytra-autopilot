@@ -73,6 +73,39 @@ public class ModConfig {
     public static final boolean elytraAutoSwapDefault = false;
     public static final boolean cameraDecoupledDefault = false;
 
+    // Obstacle avoidance defaults
+    public static final boolean obstacleAvoidanceDefault = true;
+    public static final double avoidanceLookaheadDefault = 5.0;
+    public static final double avoidanceClearanceDefault = 6.0;
+    public static final double avoidanceMaxClimbAngleDefault = 45.0;
+    public static final double avoidanceMaxDescentAngleDefault = 35.0;
+    public static final double avoidancePitchRateDefault = 3.0;
+    public static final double minAvoidanceLookahead = 0.5;
+    public static final double maxAvoidanceLookahead = 30.0;
+    public static final double minAvoidanceClearance = 0.5;
+    public static final double maxAvoidanceClearance = 32.0;
+    public static final double minAvoidanceAngle = 0.0;
+    public static final double maxAvoidanceAngle = 85.0;
+    public static final double minAvoidancePitchRate = 0.1;
+    public static final double maxAvoidancePitchRate = 15.0;
+    public static final boolean showAvoidanceStatusDefault = true;
+
+    // Direct landing defaults
+    public static final boolean directLandingDefault = true;
+    public static final double directLandingGlideAngleDefault = 20.0;
+    public static final double directLandingMaxAngleDefault = 30.0;
+    public static final double directLandingMinDistanceDefault = 40.0;
+    public static final double directLandingFlareHeightDefault = 20.0;
+    public static final double directLandingFlareAngleDefault = -12.0;
+    public static final double minDirectLandingAngle = 0.0;
+    public static final double maxDirectLandingAngle = 80.0;
+    public static final double minDirectLandingDistance = 0.0;
+    public static final double maxDirectLandingDistance = 10000.0;
+    public static final double minDirectLandingFlareHeight = 0.0;
+    public static final double maxDirectLandingFlareHeight = 200.0;
+    public static final double minDirectLandingFlareAngle = -85.0;
+    public static final double maxDirectLandingFlareAngle = 85.0;
+
     // Strategy mode defaults
     public static final boolean strategyModeDefault = false;
     public static final int cruiseAltitudeMinDefault = 320;
@@ -108,6 +141,7 @@ public class ModConfig {
     public boolean showEta = showEtaDefault;
     public boolean showAutoLand = showAutoLandDefault;
     public boolean showLandingStatus = showLandingStatusDefault;
+    public boolean showAvoidanceStatus = showAvoidanceStatusDefault;
     public boolean useCycleAvgSpeed = useCycleAvgSpeedDefault;
     public boolean smoothEta = smoothEtaDefault;
 
@@ -120,12 +154,26 @@ public class ModConfig {
     public double turningSpeed = turningSpeedDefault;
     public double takeOffPull = takeOffPullDefault;
     public boolean riskyLanding = riskyLandingDefault;
+    public boolean directLanding = directLandingDefault;
+    public double directLandingGlideAngle = directLandingGlideAngleDefault;
+    public double directLandingMaxAngle = directLandingMaxAngleDefault;
+    public double directLandingMinDistance = directLandingMinDistanceDefault;
+    public double directLandingFlareHeight = directLandingFlareHeightDefault;
+    public double directLandingFlareAngle = directLandingFlareAngleDefault;
     public boolean poweredFlight = poweredFlightDefault;
     public boolean elytraHotswap = elytraHotswapDefault;
     public boolean fireworkHotswap = fireworkHotswapDefault;
     public boolean emergencyLand = emergencyLandDefault;
     public boolean elytraAutoSwap = elytraAutoSwapDefault;
     public boolean cameraDecoupled = cameraDecoupledDefault;
+
+    // Obstacle avoidance values
+    public boolean obstacleAvoidance = obstacleAvoidanceDefault;
+    public double avoidanceLookahead = avoidanceLookaheadDefault;
+    public double avoidanceClearance = avoidanceClearanceDefault;
+    public double avoidanceMaxClimbAngle = avoidanceMaxClimbAngleDefault;
+    public double avoidanceMaxDescentAngle = avoidanceMaxDescentAngleDefault;
+    public double avoidancePitchRate = avoidancePitchRateDefault;
 
     // Strategy mode values
     public boolean strategyMode = strategyModeDefault;
@@ -268,6 +316,13 @@ public class ModConfig {
                                 .binding(showLandingStatusDefault, () -> ModConfig.INSTANCE.showLandingStatus,
                                         newVal -> ModConfig.INSTANCE.showLandingStatus = newVal)
                                 .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.gui.avoidanceStatus"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.gui.avoidanceStatus.desc")))
+                                .binding(showAvoidanceStatusDefault, () -> ModConfig.INSTANCE.showAvoidanceStatus,
+                                        newVal -> ModConfig.INSTANCE.showAvoidanceStatus = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
                         .build())
                 .category(ConfigCategory.createBuilder()
                         .name(Component.translatable("config.elytraautopilot.flightprofile"))
@@ -331,6 +386,67 @@ public class ModConfig {
                                 .binding(riskyLandingDefault, () -> ModConfig.INSTANCE.riskyLanding,
                                         newVal -> ModConfig.INSTANCE.riskyLanding = newVal)
                                 .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.flightprofile.directLanding"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLanding.desc")))
+                                .binding(directLandingDefault, () -> ModConfig.INSTANCE.directLanding,
+                                        newVal -> ModConfig.INSTANCE.directLanding = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLandingGlideAngle"))
+                                .description(OptionDescription.of(Component.translatable(
+                                        "config.elytraautopilot.flightprofile.directLandingGlideAngle.desc")))
+                                .binding(directLandingGlideAngleDefault,
+                                        () -> ModConfig.INSTANCE.directLandingGlideAngle,
+                                        newVal -> ModConfig.INSTANCE.directLandingGlideAngle = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minDirectLandingAngle, maxDirectLandingAngle).step(1.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLandingMaxAngle"))
+                                .description(OptionDescription.of(Component.translatable(
+                                        "config.elytraautopilot.flightprofile.directLandingMaxAngle.desc")))
+                                .binding(directLandingMaxAngleDefault, () -> ModConfig.INSTANCE.directLandingMaxAngle,
+                                        newVal -> ModConfig.INSTANCE.directLandingMaxAngle = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minDirectLandingAngle, maxDirectLandingAngle).step(1.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLandingMinDistance"))
+                                .description(OptionDescription.of(Component.translatable(
+                                        "config.elytraautopilot.flightprofile.directLandingMinDistance.desc")))
+                                .binding(directLandingMinDistanceDefault,
+                                        () -> ModConfig.INSTANCE.directLandingMinDistance,
+                                        newVal -> ModConfig.INSTANCE.directLandingMinDistance = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minDirectLandingDistance, maxDirectLandingDistance).step(5.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLandingFlareHeight"))
+                                .description(OptionDescription.of(Component.translatable(
+                                        "config.elytraautopilot.flightprofile.directLandingFlareHeight.desc")))
+                                .binding(directLandingFlareHeightDefault,
+                                        () -> ModConfig.INSTANCE.directLandingFlareHeight,
+                                        newVal -> ModConfig.INSTANCE.directLandingFlareHeight = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minDirectLandingFlareHeight, maxDirectLandingFlareHeight).step(1.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component
+                                        .translatable("config.elytraautopilot.flightprofile.directLandingFlareAngle"))
+                                .description(OptionDescription.of(Component.translatable(
+                                        "config.elytraautopilot.flightprofile.directLandingFlareAngle.desc")))
+                                .binding(directLandingFlareAngleDefault,
+                                        () -> ModConfig.INSTANCE.directLandingFlareAngle,
+                                        newVal -> ModConfig.INSTANCE.directLandingFlareAngle = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minDirectLandingFlareAngle, maxDirectLandingFlareAngle).step(1.0))
+                                .build())
                         .option(Option.<Boolean>createBuilder()
                                 .name(Component.translatable("config.elytraautopilot.flightprofile.poweredFlight"))
                                 .description(OptionDescription.of(Component
@@ -407,6 +523,62 @@ public class ModConfig {
                                         newVal -> ModConfig.INSTANCE.cruiseAltitudeMax = newVal)
                                 .controller(opt -> IntegerFieldControllerBuilder.create(opt).min(minCruiseAltitude)
                                         .max(maxCruiseAltitude))
+                                .build())
+                        .build())
+                .category(ConfigCategory.createBuilder()
+                        .name(Component.translatable("config.elytraautopilot.avoidance"))
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.obstacleAvoidance"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.avoidance.obstacleAvoidance.desc")))
+                                .binding(obstacleAvoidanceDefault, () -> ModConfig.INSTANCE.obstacleAvoidance,
+                                        newVal -> ModConfig.INSTANCE.obstacleAvoidance = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.lookahead"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.avoidance.lookahead.desc")))
+                                .binding(avoidanceLookaheadDefault, () -> ModConfig.INSTANCE.avoidanceLookahead,
+                                        newVal -> ModConfig.INSTANCE.avoidanceLookahead = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceLookahead, maxAvoidanceLookahead).step(0.5))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.clearance"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.avoidance.clearance.desc")))
+                                .binding(avoidanceClearanceDefault, () -> ModConfig.INSTANCE.avoidanceClearance,
+                                        newVal -> ModConfig.INSTANCE.avoidanceClearance = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceClearance, maxAvoidanceClearance).step(0.5))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.maxClimbAngle"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.avoidance.maxClimbAngle.desc")))
+                                .binding(avoidanceMaxClimbAngleDefault, () -> ModConfig.INSTANCE.avoidanceMaxClimbAngle,
+                                        newVal -> ModConfig.INSTANCE.avoidanceMaxClimbAngle = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceAngle, maxAvoidanceAngle).step(1.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.maxDescentAngle"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.avoidance.maxDescentAngle.desc")))
+                                .binding(avoidanceMaxDescentAngleDefault,
+                                        () -> ModConfig.INSTANCE.avoidanceMaxDescentAngle,
+                                        newVal -> ModConfig.INSTANCE.avoidanceMaxDescentAngle = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceAngle, maxAvoidanceAngle).step(1.0))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.pitchRate"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.avoidance.pitchRate.desc")))
+                                .binding(avoidancePitchRateDefault, () -> ModConfig.INSTANCE.avoidancePitchRate,
+                                        newVal -> ModConfig.INSTANCE.avoidancePitchRate = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidancePitchRate, maxAvoidancePitchRate).step(0.1))
                                 .build())
                         .build())
                 .category(ConfigCategory.createBuilder().name(Component.translatable("config.elytraautopilot.advanced"))
