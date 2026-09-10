@@ -100,6 +100,9 @@ public class ElytraAutoPilot implements ClientModInitializer {
     /** Cached result of the straight-in landing path check for the current tick. */
     private static int directLandingCheckTick = Integer.MIN_VALUE;
     private static boolean directLandingCheckResult = false;
+    /** Cached approach attitude for the current tick. */
+    private static int directLandingAimTick = Integer.MIN_VALUE;
+    private static double directLandingAimResult = 0.0;
 
     // Strategy mode fields
     private static FlightStrategy climbStrategy;
@@ -788,13 +791,23 @@ public class ElytraAutoPilot implements ClientModInitializer {
      * model instead.
      */
     private static double directLandingAimAngle(Player player) {
+        // The solver runs several simulations, so only redo it when the world has
+        // moved; the flight controllers run once per frame.
+        int tick = player.tickCount;
+        if (tick == directLandingAimTick) {
+            return directLandingAimResult;
+        }
+        directLandingAimTick = tick;
+
         double wanted = isflytoActive ? directLandingAngle(player) : preferredGlideAngle();
         wanted = Mth.clamp(wanted, 0.0, ModConfig.INSTANCE.directLandingMaxAngle);
         if (!ModConfig.INSTANCE.trajectoryPrediction) {
             // Without the physics model the attitude is all we can guess.
+            directLandingAimResult = wanted;
             return wanted;
         }
-        return solveAttitude(player, wanted);
+        directLandingAimResult = solveAttitude(player, wanted);
+        return directLandingAimResult;
     }
 
     /**
