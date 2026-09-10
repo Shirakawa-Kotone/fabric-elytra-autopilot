@@ -84,6 +84,10 @@ public class ElytraAutoPilot implements ClientModInitializer {
      */
     private static final double DIRECT_LANDING_ENTRY_MARGIN = 5.0;
 
+    /** Cached result of the straight-in landing path check for the current tick. */
+    private static int directLandingCheckTick = Integer.MIN_VALUE;
+    private static boolean directLandingCheckResult = false;
+
     // Strategy mode fields
     private static FlightStrategy climbStrategy;
     private static FlightStrategy cruiseStrategy;
@@ -760,8 +764,21 @@ public class ElytraAutoPilot implements ClientModInitializer {
 
     /**
      * True when the glide path towards the landing spot is not blocked by terrain.
+     * The answer only depends on the aircraft's position, so it is cached for the
+     * current tick: the flight controllers run once per frame but the world only
+     * moves once per tick.
      */
     private static boolean directLandingPathClear(Player player) {
+        int tick = player.tickCount;
+        if (tick == directLandingCheckTick) {
+            return directLandingCheckResult;
+        }
+        directLandingCheckTick = tick;
+        directLandingCheckResult = computeDirectLandingPathClear(player);
+        return directLandingCheckResult;
+    }
+
+    private static boolean computeDirectLandingPathClear(Player player) {
         double height = Math.max(directLandingHeight(player), 0.0);
         double pathLength = Math.hypot(directLandingDistance(player), height);
         double checkLength = Math.min(pathLength, MAX_DIRECT_LANDING_CHECK);
