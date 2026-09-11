@@ -46,6 +46,8 @@ Enabled by default and configurable under **Obstacle Avoidance** in the config s
 
 A path only counts as clear if it keeps **Minimum Terrain Separation** (2 blocks by default) from terrain, above the aircraft *and* underneath it. Without the room underneath, a path that clears a ridge by a hand's width is not a collision - but it grazes, and grazing at elytra speed is a crash waiting for a rounding error. Raising the setting makes avoidance react earlier and fly wider; lowering it lets the aircraft skim.
 
+Avoidance only acts on what is close: an obstacle has to be within **Reaction Distance** (60 blocks by default, about two seconds at cruise speed) before the pitch changes. Further terrain is still planned for - the escape that gets picked has to clear it - but distance alone never makes the aircraft twitch. 60 blocks is roughly the closest it can be left and still clear a ridge at cruise speed; raise it to react earlier and fly a wider line, lower it for a later, sharper reaction (too low and there is no longer time to do anything, and the landing fallback takes over). **Look-ahead Time** is the separate horizon the escape search plans over.
+
 When the aircraft is short of speed, avoidance works up a ladder instead of just holding the steepest climb:
 
 1. **Enough speed, or a pull-up actually clears** - climb straight away.

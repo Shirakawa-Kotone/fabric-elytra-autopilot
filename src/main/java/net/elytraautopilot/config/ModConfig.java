@@ -83,6 +83,7 @@ public class ModConfig {
     // Obstacle avoidance defaults
     public static final boolean obstacleAvoidanceDefault = true;
     public static final double avoidanceLookaheadDefault = 5.0;
+    public static final double avoidanceReactionDistanceDefault = 60.0;
     public static final double avoidanceSeparationDefault = 2.0;
     public static final double avoidanceMaxClimbAngleDefault = 45.0;
     public static final double avoidanceMaxDescentAngleDefault = 35.0;
@@ -93,6 +94,8 @@ public class ModConfig {
     public static final int avoidanceGiveUpTicksDefault = 200;
     public static final double minAvoidanceLookahead = 0.5;
     public static final double maxAvoidanceLookahead = 30.0;
+    public static final double minAvoidanceReactionDistance = 8.0;
+    public static final double maxAvoidanceReactionDistance = 320.0;
     public static final double minAvoidanceSeparation = 0.5;
     public static final double maxAvoidanceSeparation = 32.0;
     public static final double minAvoidanceAngle = 0.0;
@@ -191,6 +194,7 @@ public class ModConfig {
     public int trajectoryPreviewTicks = trajectoryPreviewTicksDefault;
     public boolean obstacleAvoidance = obstacleAvoidanceDefault;
     public double avoidanceLookahead = avoidanceLookaheadDefault;
+    public double avoidanceReactionDistance = avoidanceReactionDistanceDefault;
     public double avoidanceSeparation = avoidanceSeparationDefault;
     public double avoidanceMaxClimbAngle = avoidanceMaxClimbAngleDefault;
     public double avoidanceMaxDescentAngle = avoidanceMaxDescentAngleDefault;
@@ -601,6 +605,16 @@ public class ModConfig {
                                         newVal -> ModConfig.INSTANCE.avoidanceLookahead = newVal)
                                 .controller(opt -> DoubleSliderControllerBuilder.create(opt)
                                         .range(minAvoidanceLookahead, maxAvoidanceLookahead).step(0.5))
+                                .build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.reactionDistance"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.avoidance.reactionDistance.desc")))
+                                .binding(avoidanceReactionDistanceDefault,
+                                        () -> ModConfig.INSTANCE.avoidanceReactionDistance,
+                                        newVal -> ModConfig.INSTANCE.avoidanceReactionDistance = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceReactionDistance, maxAvoidanceReactionDistance).step(5.0))
                                 .build())
                         .option(Option.<Double>createBuilder()
                                 .name(Component.translatable("config.elytraautopilot.avoidance.separation"))

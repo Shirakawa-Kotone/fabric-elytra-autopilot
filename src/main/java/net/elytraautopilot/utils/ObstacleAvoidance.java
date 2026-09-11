@@ -84,6 +84,8 @@ public final class ObstacleAvoidance {
     /** Never look more than this short/long distance ahead, in blocks. */
     private static final double MIN_LOOKAHEAD = 24.0;
     private static final double MAX_LOOKAHEAD = 320.0;
+    /** Shortest reaction distance the configuration is allowed to ask for. */
+    private static final double MIN_REACTION_DISTANCE = 8.0;
     /** Angular resolution of the escape search, in degrees. */
     private static final double SEARCH_STEP = 7.5;
     /**
@@ -143,8 +145,13 @@ public final class ObstacleAvoidance {
 
     /** Scores an attitude by how far it flies before hitting terrain. */
     private interface EscapeEvaluator {
-        /** Flies the attitude and reports the outcome. */
-        Probe evaluate(float pitch);
+        /**
+         * Flies the attitude and reports the outcome.
+         *
+         * @param distance
+         *            how far ahead to look, in blocks
+         */
+        Probe evaluate(float pitch, double distance);
     }
 
     /**
@@ -235,11 +242,13 @@ public final class ObstacleAvoidance {
             lookahead = Math.max(4.0, lookaheadCap);
         }
         lookaheadDistance = lookahead;
+        double reactionDistance = Mth.clamp(ModConfig.INSTANCE.avoidanceReactionDistance, MIN_REACTION_DISTANCE,
+                Math.max(MIN_REACTION_DISTANCE, lookahead));
 
         if (ModConfig.INSTANCE.trajectoryPrediction) {
-            tickPredicted(player, lookahead, normalAttitude);
+            tickPredicted(player, lookahead, reactionDistance, normalAttitude);
         } else {
-            tickRaycast(level, player, lookahead, normalAttitude);
+            tickRaycast(level, player, lookahead, reactionDistance, normalAttitude);
         }
     }
 
@@ -247,13 +256,13 @@ public final class ObstacleAvoidance {
      * Scores attitudes by flying them with the vanilla elytra physics and checking
      * the resulting path for terrain.
      */
-    private static void tickPredicted(Player player, double lookahead, float normalAttitude) {
+    private static void tickPredicted(Player player, double lookahead, double reactionDistance, float normalAttitude) {
         Envelope envelope = envelope();
-        update(player.getXRot(), normalAttitude, pitch -> {
-            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, lookahead,
+        update(player.getXRot(), normalAttitude, (pitch, distance) -> {
+            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, distance,
                     envelope);
             return new Probe(result.travelledDistance, result.collision);
-        });
+        }, reactionDistance);
     }
 
     /**
@@ -280,32 +289,40 @@ public final class ObstacleAvoidance {
     }
 
     /** Scores attitudes with a fan of ray casts along the current heading. */
-    private static void tickRaycast(Level level, Player player, double lookahead, float normalAttitude) {
+    private static void tickRaycast(Level level, Player player, double lookahead, double reactionDistance,
+            float normalAttitude) {
         Vec3 origin = player.getEyePosition().subtract(0.0, 0.5, 0.0);
         float yaw = player.getYRot();
-        update(player.getXRot(), normalAttitude, pitch -> {
-            double distance = clearance(level, player, origin, yaw, pitch, lookahead);
-            return new Probe(distance, distance < lookahead);
-        });
+        update(player.getXRot(), normalAttitude, (pitch, distance) -> {
+            double cleared = clearance(level, player, origin, yaw, pitch, distance);
+            return new Probe(cleared, cleared < distance);
+        }, reactionDistance);
     }
 
     /**
      * Engagement logic shared by both detectors.
      *
      * <p>
-     * Avoidance engages as soon as the path is blocked. It only lets go again once
-     * the path has been clear <em>and</em> the attitude the autopilot wants to fly
-     * is safe as well, held for {@link #MIN_HOLD_TICKS}. Releasing earlier makes
-     * the normal controller immediately pitch back into the terrain, so the two
-     * take turns and the aircraft nods up and down.
+     * Avoidance engages as soon as the path is blocked <em>within the reaction
+     * distance</em>, and only then. Terrain further away is still scanned, because
+     * the escape it picks has to clear everything along the way, but an obstacle a
+     * hundred blocks off does not make the aircraft change attitude: a clear route
+     * stays calm. It only lets go again once the path has been clear <em>and</em>
+     * the attitude the autopilot wants to fly is safe as well, held for
+     * {@link #MIN_HOLD_TICKS}. Releasing earlier makes the normal controller
+     * immediately pitch back into the terrain, so the two take turns and the
+     * aircraft nods up and down.
      *
      * <p>
      * When nothing gets past the obstacle at all the autopilot is asked to land
      * (see {@link #consumeLandingRequest()}) - first after a long attempt, and
      * immediately once the obstacle is too close to try anything else.
      */
-    private static void update(float pitch, float normalAttitude, EscapeEvaluator evaluator) {
-        Probe current = evaluator.evaluate(pitch);
+    private static void update(float pitch, float normalAttitude, EscapeEvaluator evaluator, double reactionDistance) {
+        // Only what is close enough to matter this tick decides whether avoidance
+        // engages. The escape search still looks the whole configured distance
+        // ahead, so the plan it picks is checked against everything in its way.
+        Probe current = evaluator.evaluate(pitch, reactionDistance);
         boolean blocked = current.hit();
         if (blocked) {
             obstacleDistance = current.travelled();
@@ -317,7 +334,8 @@ public final class ObstacleAvoidance {
             if (!active) {
                 return;
             }
-            boolean autopilotSafe = Float.isNaN(normalAttitude) || !evaluator.evaluate(normalAttitude).hit();
+            boolean autopilotSafe = Float.isNaN(normalAttitude)
+                    || !evaluator.evaluate(normalAttitude, reactionDistance).hit();
             if (autopilotSafe) {
                 if (--holdTicks <= 0) {
                     release();
@@ -343,7 +361,7 @@ public final class ObstacleAvoidance {
         escapeFound = false;
         bestEscapeDistance = 0.0;
         searchEscape(pitch, candidate -> {
-            Probe probe = evaluator.evaluate(candidate);
+            Probe probe = evaluator.evaluate(candidate, lookaheadDistance);
             if (probe.travelled() > bestEscapeDistance) {
                 bestEscapeDistance = probe.travelled();
             }
@@ -648,8 +666,4 @@ public final class ObstacleAvoidance {
         return obstacleDistance;
     }
 
-    /** How far ahead the aircraft is looking, in blocks. */
-    public static double getLookaheadDistance() {
-        return lookaheadDistance;
-    }
 }
