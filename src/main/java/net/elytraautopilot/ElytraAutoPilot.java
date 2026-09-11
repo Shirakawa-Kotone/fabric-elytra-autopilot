@@ -376,7 +376,9 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 // Powered flight behavior
                 minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
             }
-            if (obstacleAvoidance) {
+            if (obstacleAvoidance && !strategyActive) {
+                // Classic mode owns its pitch here; strategy mode already steered in
+                // onClientTick, so only one of them may touch the pitch.
                 ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate * speedMod / 3.0);
                 pitch = player.getXRot();
                 minecraftClient.options.keyUse
@@ -430,6 +432,9 @@ public class ElytraAutoPilot implements ClientModInitializer {
 
         double altitude;
         if (autoFlight) {
+            // Attitude the mode controllers want to fly, handed to obstacle
+            // avoidance so it can tell whether releasing the pitch is safe.
+            float normalAttitude = Float.NaN;
             var durability = getElytraDurability(player);
             if (ModConfig.INSTANCE.emergencyLand && durability < ModConfig.INSTANCE.elytraReplaceDurability) {
                 if (ModConfig.INSTANCE.elytraAutoSwap) {
@@ -454,22 +459,6 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 return;
             }
 
-            // Look for terrain in the flight path before the controllers run.
-            // Landings handle the ground themselves, so avoidance only takes part
-            // while cruising and during a straight-in approach - and there it is
-            // shortened so the intended touchdown point is not seen as an obstacle.
-            if (!onTakeoff && (!(isLanding || forceLand) || directLanding)) {
-                double lookaheadCap = Double.MAX_VALUE;
-                if (directLanding) {
-                    double pathLength = Math.hypot(directLandingDistance(player),
-                            Math.max(directLandingHeight(player), 0.0));
-                    lookaheadCap = pathLength * 0.7;
-                }
-                ObstacleAvoidance.tick(player, currentVelocity, lookaheadCap);
-            } else {
-                ObstacleAvoidance.clear();
-            }
-
             if (ModConfig.INSTANCE.strategyMode && climbStrategy != null && cruiseStrategy != null && !onTakeoff
                     && !isLanding && !forceLand) {
                 // Strategy mode: altitude-based phase switching + precomputed pitch waveform
@@ -484,7 +473,7 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     climbTick = 0;
                 }
 
-                // Apply precomputed pitch for the current phase
+                // Pitch the waveform wants for the current phase
                 FlightStrategy strategy;
                 int tick;
                 if (strategyPhase == FlightPhase.CLIMB) {
@@ -495,13 +484,7 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     tick = cruiseTick;
                 }
                 double angle = strategy.angleAt(tick);
-                if (ObstacleAvoidance.isActive()) {
-                    // Obstacle avoidance owns the pitch channel until the path is
-                    // clear again, so the waveform cannot pull the nose back down.
-                    ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate);
-                } else {
-                    player.setXRot((float) Math.max(-90.0, Math.min(90.0, -angle)));
-                }
+                normalAttitude = (float) Math.max(-90.0, Math.min(90.0, -angle));
 
                 // Advance the waveform tick index
                 if (strategyPhase == FlightPhase.CLIMB) {
@@ -509,9 +492,6 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 } else {
                     cruiseTick = strategy.nextTick(cruiseTick);
                 }
-
-                // Powered flight (same behavior as classic mode)
-                minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
             } else {
                 // Classic mode: velocity-thresholded hysteresis controller
                 strategyActive = false;
@@ -542,6 +522,29 @@ public class ElytraAutoPilot implements ClientModInitializer {
                         pullUp = false;
                     }
                 }
+                // The attitude this controller is heading for, used to decide when
+                // obstacle avoidance may hand the pitch back.
+                normalAttitude = (float) (pullDown ? ModConfig.INSTANCE.pullDownAngle : ModConfig.INSTANCE.pullUpAngle);
+            }
+
+            // Terrain protection runs after the mode controllers so it knows what they
+            // want to do, and before any pitch is applied.
+            if (!onTakeoff && (!(isLanding || forceLand) || directLanding)) {
+                double lookaheadCap = Double.MAX_VALUE;
+                if (directLanding) {
+                    double pathLength = Math.hypot(directLandingDistance(player),
+                            Math.max(directLandingHeight(player), 0.0));
+                    lookaheadCap = pathLength * 0.7;
+                }
+                ObstacleAvoidance.tick(player, currentVelocity, lookaheadCap, normalAttitude);
+            } else {
+                ObstacleAvoidance.clear();
+            }
+
+            // Strategy mode applies its own pitch here; the classic controller applies
+            // it every frame in onScreenTick.
+            if (strategyActive && !ObstacleAvoidance.isActive()) {
+                player.setXRot(normalAttitude);
             }
         }
         if (!takeoffPressed && KeyBindings.takeoffBinding.isDown()) {

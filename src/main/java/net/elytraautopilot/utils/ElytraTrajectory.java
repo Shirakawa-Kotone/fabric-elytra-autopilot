@@ -47,8 +47,12 @@ public final class ElytraTrajectory {
 
     /** Hard upper bound on the simulated horizon. */
     public static final int MAX_TICKS = 400;
-    /** Terrain is sampled every this many ticks along a predicted path. */
-    private static final int COLLISION_STEP = 2;
+    /**
+     * Terrain is sampled every this many ticks along a predicted path. Every
+     * segment is swept in full, so a thin wall cannot be stepped over; a coarser
+     * step only means the impact is noticed a little later along the path.
+     */
+    private static final int COLLISION_STEP = 4;
     /** The player's body is approximated by two points at these heights. */
     private static final double BODY_LOW = 0.6;
     private static final double BODY_HIGH = 1.5;
@@ -61,7 +65,10 @@ public final class ElytraTrajectory {
     public static final class Result {
         /** Whether the path ran into terrain (or the bottom of the world). */
         public final boolean collision;
-        /** Whether the path covered the requested distance. */
+        /**
+         * Whether the path covered the requested distance. Informational only: a climb
+         * bleeds speed and may not cover the whole scan, which is not a collision.
+         */
         public final boolean reachedGoal;
         /** Distance flown, in blocks. */
         public final double travelledDistance;
@@ -76,10 +83,12 @@ public final class ElytraTrajectory {
         }
 
         /**
-         * True when the whole requested distance was flown without hitting anything.
+         * True when the simulated path never hit terrain. A path that used up the
+         * simulated ticks counts as clear: nothing was in the way for as far as the
+         * aircraft could be flown, and the scan is redone every tick.
          */
         public boolean isClear() {
-            return !this.collision && this.reachedGoal;
+            return !this.collision;
         }
     }
 

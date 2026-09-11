@@ -72,10 +72,43 @@ public final class ObstacleAvoidance {
     private static final double MAX_FAN_ANGLE = 12.0;
     /** Evaluator result meaning "nothing is in the way". */
     private static final double CLEAR = Double.MAX_VALUE;
+    /**
+     * How long the escape keeps the pitch after the path clears. Handing control
+     * straight back lets the normal controller pitch into the terrain again, which
+     * makes the two controllers take turns and the view shake.
+     */
+    private static final int MIN_HOLD_TICKS = 20;
+    /**
+     * How far past the obstacle an escape must fly to count. A steep pull-up burns
+     * all the speed and stalls: it travels almost nowhere, so it never hits
+     * anything, and without this an attitude that just hangs in the air would be
+     * mistaken for a way around the obstacle.
+     */
+    private static final double ESCAPE_MARGIN = 24.0;
+    /** Keep the committed escape unless another one is clearly better. */
+    private static final double COMMITMENT_KEEP = 0.85;
+    /**
+     * Ticks between escape searches. The engagement test still runs every tick, but
+     * a search simulates a dozen attitudes, and the chosen attitude is absolute, so
+     * recomputing it a few times a second is plenty.
+     */
+    private static final int SEARCH_INTERVAL_TICKS = 3;
+
+    /** What an attitude would do: how far it flies and whether it hit something. */
+    private record Probe(double travelled, boolean hit) {
+    }
 
     /** Scores an attitude by how far it flies before hitting terrain. */
     private interface EscapeEvaluator {
-        /** Distance flown before impact, or {@link #CLEAR} when the path is clear. */
+        /** Flies the attitude and reports the outcome. */
+        Probe evaluate(float pitch);
+    }
+
+    /**
+     * Scores an attitude for the escape search: the distance it flies before
+     * hitting terrain, or {@link #CLEAR} when it gets past the obstacle.
+     */
+    private interface EscapeScore {
         double evaluate(float pitch);
     }
 
@@ -84,6 +117,8 @@ public final class ObstacleAvoidance {
     private static double obstacleDistance = 0.0;
     private static double lookaheadDistance = 0.0;
     private static boolean active = false;
+    private static int holdTicks = 0;
+    private static int searchCooldown = 0;
 
     private ObstacleAvoidance() {
     }
@@ -99,16 +134,22 @@ public final class ObstacleAvoidance {
      *            upper bound for the scan distance. A straight-in landing uses this
      *            to shorten the scan so that the ground it intends to touch down on
      *            is not mistaken for an obstacle.
+     * @param normalAttitude
+     *            the attitude the autopilot would fly without any avoidance, or
+     *            {@link Float#NaN} when there is none. Avoidance only hands the
+     *            pitch back once this attitude is safe too.
      */
-    public static void tick(Player player, double speedPerTick, double lookaheadCap) {
-        clear();
+    public static void tick(Player player, double speedPerTick, double lookaheadCap, float normalAttitude) {
+        resetOutputs();
 
         if (player == null || !ModConfig.INSTANCE.obstacleAvoidance) {
+            release();
             return;
         }
 
         Level level = player.level();
         if (level == null) {
+            release();
             return;
         }
 
@@ -116,6 +157,7 @@ public final class ObstacleAvoidance {
         double horizontalSpeed = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
         double speed = Math.max(speedPerTick, horizontalSpeed);
         if (speed < MIN_SPEED) {
+            release();
             return;
         }
 
@@ -127,9 +169,9 @@ public final class ObstacleAvoidance {
         lookaheadDistance = lookahead;
 
         if (ModConfig.INSTANCE.trajectoryPrediction) {
-            tickPredicted(player, lookahead);
+            tickPredicted(player, lookahead, normalAttitude);
         } else {
-            tickRaycast(level, player, lookahead);
+            tickRaycast(level, player, lookahead, normalAttitude);
         }
     }
 
@@ -137,57 +179,98 @@ public final class ObstacleAvoidance {
      * Scores attitudes by flying them with the vanilla elytra physics and checking
      * the resulting path for terrain.
      */
-    private static void tickPredicted(Player player, double lookahead) {
-        float pitch = player.getXRot();
-        double clearance = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
-        ElytraTrajectory.Result current = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, lookahead,
-                clearance);
-        if (current.isClear()) {
-            // The path the aircraft is actually flying is clear.
-            return;
-        }
-        obstacleDistance = current.travelledDistance;
-
-        searchEscape(pitch, candidate -> {
-            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, candidate, ElytraTrajectory.MAX_TICKS,
-                    lookahead, clearance);
-            return result.isClear() ? CLEAR : result.travelledDistance;
+    private static void tickPredicted(Player player, double lookahead, float normalAttitude) {
+        double margin = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
+        update(player.getXRot(), normalAttitude, pitch -> {
+            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, lookahead,
+                    margin);
+            return new Probe(result.travelledDistance, result.collision);
         });
     }
 
     /** Scores attitudes with a fan of ray casts along the current heading. */
-    private static void tickRaycast(Level level, Player player, double lookahead) {
+    private static void tickRaycast(Level level, Player player, double lookahead, float normalAttitude) {
         Vec3 origin = player.getEyePosition().subtract(0.0, 0.5, 0.0);
         float yaw = player.getYRot();
-        float pitch = player.getXRot();
-
-        double currentClearance = clearance(level, player, origin, yaw, pitch, lookahead);
-        if (currentClearance >= lookahead) {
-            return;
-        }
-        obstacleDistance = currentClearance;
-
-        searchEscape(pitch, candidate -> {
-            double candidateClearance = clearance(level, player, origin, yaw, candidate, lookahead);
-            return candidateClearance >= lookahead ? CLEAR : candidateClearance;
+        update(player.getXRot(), normalAttitude, pitch -> {
+            double distance = clearance(level, player, origin, yaw, pitch, lookahead);
+            return new Probe(distance, distance < lookahead);
         });
     }
 
     /**
-     * Shared escape search: the shallowest climb that clears the obstacle wins,
-     * then a descent, then whatever flies furthest. Climbing is always preferred.
+     * Engagement logic shared by both detectors.
+     *
+     * <p>
+     * Avoidance engages as soon as the path is blocked. It only lets go again once
+     * the path has been clear <em>and</em> the attitude the autopilot wants to fly
+     * is safe as well, held for {@link #MIN_HOLD_TICKS}. Releasing earlier makes
+     * the normal controller immediately pitch back into the terrain, so the two
+     * take turns and the aircraft nods up and down.
      */
-    private static void searchEscape(float currentPitch, EscapeEvaluator evaluator) {
-        // 1) Pull up.
+    private static void update(float pitch, float normalAttitude, EscapeEvaluator evaluator) {
+        Probe current = evaluator.evaluate(pitch);
+        boolean blocked = current.hit();
+        if (blocked) {
+            obstacleDistance = current.travelled();
+        }
+
+        if (!blocked) {
+            if (!active) {
+                return;
+            }
+            boolean autopilotSafe = Float.isNaN(normalAttitude) || !evaluator.evaluate(normalAttitude).hit();
+            if (autopilotSafe) {
+                if (--holdTicks <= 0) {
+                    release();
+                }
+                return;
+            }
+            // The autopilot would fly into terrain from here: hold the safe attitude
+            // the aircraft already has instead of letting it pitch down.
+            holdTicks = MIN_HOLD_TICKS;
+            set(pitch <= 0.0f ? Action.CLIMB : Action.DESCEND, pitch);
+            return;
+        }
+
+        holdTicks = MIN_HOLD_TICKS;
+        if (active && action != Action.NONE && --searchCooldown > 0) {
+            // Keep the attitude already chosen; a new plan a few times a second is
+            // enough and keeps the cost of the search off the frame budget.
+            return;
+        }
+        searchCooldown = SEARCH_INTERVAL_TICKS;
+        double required = current.travelled() + ESCAPE_MARGIN;
+        searchEscape(pitch, candidate -> {
+            Probe probe = evaluator.evaluate(candidate);
+            if (probe.hit()) {
+                return probe.travelled();
+            }
+            // Getting clear is not enough: the escape has to carry the aircraft past
+            // the obstacle it is avoiding.
+            return probe.travelled() >= required ? CLEAR : probe.travelled();
+        });
+    }
+
+    /**
+     * Shared escape search: the shallowest attitude that carries the aircraft past
+     * the obstacle wins, climbing first, then descending.
+     *
+     * <p>
+     * Candidates are absolute attitudes, not offsets from the current one.
+     * Searching relative to the current pitch makes the target chase itself: every
+     * tick the chosen attitude comes out a little steeper than the aircraft already
+     * is, so it keeps pulling up until it stalls and the nose never settles.
+     */
+    private static void searchEscape(float currentPitch, EscapeScore score) {
         double maxClimb = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxClimbAngle, 0.0, 85.0);
+        double maxDescent = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxDescentAngle, 0.0, 85.0);
+
+        // 1) Pull up: shallowest climb first, so the aircraft deviates least.
         double bestClimbPitch = Double.NaN;
         double bestClimbDistance = -1.0;
-        for (double delta = SEARCH_STEP; delta <= maxClimb + 1.0e-6; delta += SEARCH_STEP) {
-            float candidate = (float) (currentPitch - delta);
-            if (candidate < -89.0f) {
-                break;
-            }
-            double distance = evaluator.evaluate(candidate);
+        for (double candidate = -SEARCH_STEP; candidate >= -maxClimb - 1.0e-6; candidate -= SEARCH_STEP) {
+            double distance = score.evaluate((float) candidate);
             if (distance == CLEAR) {
                 set(Action.CLIMB, candidate);
                 return;
@@ -199,15 +282,10 @@ public final class ObstacleAvoidance {
         }
 
         // 2) Nothing to climb over (or the ceiling is too low): dive under it.
-        double maxDescent = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxDescentAngle, 0.0, 85.0);
         double bestDescentPitch = Double.NaN;
         double bestDescentDistance = -1.0;
-        for (double delta = SEARCH_STEP; delta <= maxDescent + 1.0e-6; delta += SEARCH_STEP) {
-            float candidate = (float) (currentPitch + delta);
-            if (candidate > 89.0f) {
-                break;
-            }
-            double distance = evaluator.evaluate(candidate);
+        for (double candidate = SEARCH_STEP; candidate <= maxDescent + 1.0e-6; candidate += SEARCH_STEP) {
+            double distance = score.evaluate((float) candidate);
             if (distance == CLEAR) {
                 set(Action.DESCEND, candidate);
                 return;
@@ -219,10 +297,30 @@ public final class ObstacleAvoidance {
         }
 
         // 3) Boxed in: keep whatever buys the most room, still preferring a climb.
+        // Stay with the attitude already committed to unless another one is clearly
+        // better, otherwise the escape flickers between candidates every tick and
+        // that shows up as the nose shaking.
+        double bestPitch = Double.NaN;
+        double bestDistance = -1.0;
+        Action bestAction = Action.EVADE;
         if (!Double.isNaN(bestClimbPitch) && bestClimbDistance >= bestDescentDistance) {
-            set(Action.CLIMB, bestClimbPitch);
+            bestPitch = bestClimbPitch;
+            bestDistance = bestClimbDistance;
+            bestAction = Action.CLIMB;
         } else if (!Double.isNaN(bestDescentPitch)) {
-            set(Action.DESCEND, bestDescentPitch);
+            bestPitch = bestDescentPitch;
+            bestDistance = bestDescentDistance;
+            bestAction = Action.DESCEND;
+        }
+
+        if (active && action != Action.NONE && !Double.isNaN(bestPitch)
+                && score.evaluate(targetPitch) >= bestDistance * COMMITMENT_KEEP) {
+            set(action, targetPitch);
+            return;
+        }
+
+        if (!Double.isNaN(bestPitch)) {
+            set(bestAction, bestPitch);
         } else {
             set(Action.EVADE, currentPitch);
         }
@@ -337,13 +435,25 @@ public final class ObstacleAvoidance {
         }
     }
 
-    /** Forgets any previously detected obstacle. */
+    /** Forgets any previously detected obstacle and drops the engagement. */
     public static void clear() {
-        action = Action.NONE;
-        targetPitch = 0.0f;
+        resetOutputs();
+        release();
+    }
+
+    /** Clears the per-tick readouts, keeping the engagement and its target. */
+    private static void resetOutputs() {
         obstacleDistance = 0.0;
         lookaheadDistance = 0.0;
+    }
+
+    /** Hands the pitch back to the autopilot. */
+    private static void release() {
         active = false;
+        holdTicks = 0;
+        searchCooldown = 0;
+        action = Action.NONE;
+        targetPitch = 0.0f;
     }
 
     public static boolean isActive() {
