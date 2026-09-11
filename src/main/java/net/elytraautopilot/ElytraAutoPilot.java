@@ -109,6 +109,19 @@ public class ElytraAutoPilot implements ClientModInitializer {
     private static int activationCheckTick = Integer.MIN_VALUE;
     private static boolean activationCheckResult = false;
 
+    /**
+     * Room, in blocks, kept between the lowest point of the flight profile and the
+     * ground. Flying the profile right down to the terrain leaves nothing for a
+     * gust, a lagging tick or a client that is a moment behind the server.
+     */
+    private static final double PROFILE_ROOM_MARGIN = 12.0;
+    /** Ticks of profile simulated when working out how far it dips, in ticks. */
+    private static final int PROFILE_ROOM_TICKS = 200;
+
+    /** Cached result of the profile-room check for the current tick. */
+    private static int profileRoomTick = Integer.MIN_VALUE;
+    private static double profileRoomDip = 0.0;
+
     /** Cached result of the straight-in landing path check for the current tick. */
     private static int directLandingCheckTick = Integer.MIN_VALUE;
     private static boolean directLandingCheckResult = false;
@@ -395,9 +408,11 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 // Powered flight behavior
                 minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
             }
-            if (obstacleAvoidance && !strategyActive) {
-                // Classic mode owns its pitch here; strategy mode already steered in
-                // onClientTick, so only one of them may touch the pitch.
+            if (obstacleAvoidance) {
+                // Avoidance owns the pitch whenever it is engaged, in both modes: it
+                // is decided on at tick rate but has to be applied at frame rate to
+                // keep up with the aircraft. Neither controller touches the pitch
+                // while this is true, so only one of them ever drives it.
                 ObstacleAvoidance.steer(player, ModConfig.INSTANCE.avoidancePitchRate * speedMod / 3.0);
                 pitch = player.getXRot();
                 minecraftClient.options.keyUse
@@ -502,21 +517,31 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     strategy = cruiseStrategy;
                     tick = cruiseTick;
                 }
-                double angle = strategy.angleAt(tick);
-                normalAttitude = (float) Math.max(-90.0, Math.min(90.0, -angle));
+                if (profileRoomAllowed(player)) {
+                    double angle = strategy.angleAt(tick);
+                    normalAttitude = (float) Math.max(-90.0, Math.min(90.0, -angle));
 
-                // Advance the waveform tick index
-                if (strategyPhase == FlightPhase.CLIMB) {
-                    climbTick = strategy.nextTick(climbTick);
+                    // Advance the waveform tick index
+                    if (strategyPhase == FlightPhase.CLIMB) {
+                        climbTick = strategy.nextTick(climbTick);
+                    } else {
+                        cruiseTick = strategy.nextTick(cruiseTick);
+                    }
                 } else {
-                    cruiseTick = strategy.nextTick(cruiseTick);
+                    // No room underneath for the dive the waveform is built around:
+                    // hold the attitude and let obstacle avoidance fly the terrain.
+                    normalAttitude = player.getXRot();
                 }
             } else {
                 // Classic mode: velocity-thresholded hysteresis controller
                 strategyActive = false;
+                // This profile builds speed by diving, and a dive costs about forty
+                // blocks of height at cruise speed. Where the aircraft has not got
+                // that underneath it the dive is not flown - pointing the nose at the
+                // ground only puts it there. The attitude is held and obstacle
+                // avoidance flies the terrain until there is room again.
+                boolean roomToDive = profileRoomAllowed(player);
                 if (isDescending) {
-                    pullUp = false;
-                    pullDown = true;
                     if (altitude > ModConfig.INSTANCE.maxHeight) {
                         velHigh = 0.3f;
                     } else if (altitude > ModConfig.INSTANCE.maxHeight - 10) {
@@ -528,22 +553,32 @@ public class ElytraAutoPilot implements ClientModInitializer {
                         pullDown = false;
                         pullUp = true;
                         pitchMod = 1f;
+                    } else if (roomToDive) {
+                        pullUp = false;
+                        pullDown = true;
+                    } else {
+                        pullUp = false;
+                        pullDown = false;
                     }
                 } else {
                     velHigh = 0f;
                     velLow = 0f;
-                    pullUp = true;
-                    pullDown = false;
                     if (currentVelocity <= ModConfig.INSTANCE.pullUpMinVelocity
                             || altitude > ModConfig.INSTANCE.maxHeight - 10) {
                         isDescending = true;
-                        pullDown = true;
                         pullUp = false;
+                        pullDown = roomToDive;
+                    } else {
+                        pullUp = true;
+                        pullDown = false;
                     }
                 }
                 // The attitude this controller is heading for, used to decide when
-                // obstacle avoidance may hand the pitch back.
-                normalAttitude = (float) (pullDown ? ModConfig.INSTANCE.pullDownAngle : ModConfig.INSTANCE.pullUpAngle);
+                // obstacle avoidance may hand the pitch back. With neither a climb
+                // nor a dive commanded, the aircraft holds what it has.
+                normalAttitude = (float) (pullDown
+                        ? ModConfig.INSTANCE.pullDownAngle
+                        : pullUp ? ModConfig.INSTANCE.pullUpAngle : player.getXRot());
             }
 
             // Terrain protection runs after the mode controllers so it knows what they
@@ -572,10 +607,18 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 forceLand = true;
             }
 
-            // Strategy mode applies its own pitch here; the classic controller applies
-            // it every frame in onScreenTick.
-            if (strategyActive && !ObstacleAvoidance.isActive()) {
+            // Strategy mode applies its own pitch here, and so does the classic
+            // controller when it is holding an attitude instead of flying the dive
+            // profile. Otherwise the classic controller applies it every frame in
+            // onScreenTick.
+            boolean holdingAttitude = !strategyActive && !pullUp && !pullDown && !(isLanding || forceLand);
+            if ((strategyActive || holdingAttitude) && !ObstacleAvoidance.isActive()) {
                 player.setXRot(normalAttitude);
+                if (holdingAttitude) {
+                    // Holding an attitude means the profile cannot be flown from
+                    // here; with powered flight the fireworks are the way out.
+                    minecraftClient.options.keyUse.setDown(ModConfig.INSTANCE.poweredFlight && currentVelocity < 1.25f);
+                }
             }
         }
         if (!takeoffPressed && KeyBindings.takeoffBinding.isDown()) {
@@ -602,8 +645,8 @@ public class ElytraAutoPilot implements ClientModInitializer {
         if (!configPressed && KeyBindings.configBinding.isDown()) {
             if (player.isFallFlying()) {
                 if (!autoFlight && !activationAllowed(player)) {
-                    player.sendOverlayMessage(Component.translatable("text.elytraautopilot.autoFlightFail.tooLow")
-                            .withStyle(ChatFormatting.RED));
+                    player.sendOverlayMessage(
+                            Component.translatable(activationFailureKey(player)).withStyle(ChatFormatting.RED));
                     doGlide = true;
                 } else {
                     // If the player is flying an elytra, we start the auto flight
@@ -779,7 +822,68 @@ public class ElytraAutoPilot implements ClientModInitializer {
         if (!ModConfig.INSTANCE.dynamicActivation) {
             return false;
         }
-        return dynamicActivationAllowed(player);
+        // A clear path is not enough on its own: the profile still has to have the
+        // height to be flown, or the aircraft will dive at the ground the moment it
+        // takes over.
+        return dynamicActivationAllowed(player) && profileRoomAllowed(player);
+    }
+
+    /**
+     * Translation key for why auto-flight cannot be started here. A clear path that
+     * is still refused means the profile has no room to be flown, which is a
+     * different problem from being too low for the old minimum.
+     */
+    public static String activationFailureKey(Player player) {
+        if (ModConfig.INSTANCE.dynamicActivation && dynamicActivationAllowed(player)) {
+            return "text.elytraautopilot.autoFlightFail.noRoom";
+        }
+        return "text.elytraautopilot.autoFlightFail.tooLow";
+    }
+
+    /**
+     * Whether the flight profile has the room underneath the aircraft to be flown,
+     * which is about fifty blocks for the classic dive at cruise speed and about
+     * seventy-five for the strategy climb waveform.
+     */
+    public static boolean profileRoomAllowed(Player player) {
+        double separation = Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.0, 32.0);
+        return groundheight - separation > profileDip(player) + PROFILE_ROOM_MARGIN;
+    }
+
+    /** How far below the aircraft the current flight profile reaches, in blocks. */
+    private static double profileDip(Player player) {
+        if (player == null) {
+            return 0.0;
+        }
+        int tick = player.tickCount;
+        if (tick == profileRoomTick) {
+            return profileRoomDip;
+        }
+        profileRoomTick = tick;
+        profileRoomDip = computeProfileDip(player);
+        return profileRoomDip;
+    }
+
+    private static double computeProfileDip(Player player) {
+        if (!player.isFallFlying()) {
+            return 0.0;
+        }
+        boolean strategy = (strategyActive || !autoFlight) && ModConfig.INSTANCE.strategyMode && climbStrategy != null
+                && cruiseStrategy != null;
+        if (strategy) {
+            // Which phase the autopilot would be in, which is what it would fly.
+            FlightPhase phase = strategyActive
+                    ? strategyPhase
+                    : player.position().y >= ModConfig.INSTANCE.cruiseAltitudeMax
+                            ? FlightPhase.CRUISE
+                            : FlightPhase.CLIMB;
+            FlightStrategy waveform = phase == FlightPhase.CLIMB ? climbStrategy : cruiseStrategy;
+            int start = strategyActive ? phase == FlightPhase.CLIMB ? climbTick : cruiseTick : 0;
+            int ticks = Math.min(waveform.period(), PROFILE_ROOM_TICKS);
+            return ElytraTrajectory.lowestPoint(player, step -> -waveform.angleAt(start + step), ticks);
+        }
+        return ElytraTrajectory.diveDepth(player, (float) ModConfig.INSTANCE.pullDownAngle,
+                ModConfig.INSTANCE.pullDownMaxVelocity, PROFILE_ROOM_TICKS);
     }
 
     /**

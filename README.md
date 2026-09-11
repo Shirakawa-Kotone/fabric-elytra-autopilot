@@ -12,6 +12,8 @@ Press the assigned key (default "R") while flying at a sufficient altitude to en
 
 With **Dynamic Activation** enabled (Flight Profile) the minimum altitude is no longer the only way in: if the predicted path ahead is clear the autopilot may also be started below it, which is what makes it usable in high terrain where the ground is close but nothing is actually in the way. The `Needed height` HUD line reports `Ready` in that case too.
 
+A clear path is not the whole story, though: the flight profile itself needs height. It gains speed by diving - about forty blocks for the classic dive at cruise speed, and about seventy-five for the strategy climb waveform - so where there is no room underneath for that dive, auto-flight is refused with `Not enough room below to fly the autopilot profile here` rather than started and then flown into the ground. If the room runs out later, the autopilot stops flying the profile, holds the attitude it has and lets obstacle avoidance work the terrain until there is room again.
+
 To open the config screen and enable Mod Menu, go into the mod menu and open the configuration screen there. 
 
 ## /flyto Command

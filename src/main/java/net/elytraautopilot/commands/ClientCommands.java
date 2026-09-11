@@ -85,7 +85,8 @@ public class ClientCommands {
                                                             .withStyle(ChatFormatting.GREEN));
                                                 } else {
                                                     minecraftClient.player.sendOverlayMessage(Component
-                                                            .translatable("text.elytraautopilot.autoFlightFail.tooLow")
+                                                            .translatable(ElytraAutoPilot
+                                                                    .activationFailureKey(minecraftClient.player))
                                                             .withStyle(ChatFormatting.RED));
                                                 }
                                             } else {
@@ -266,8 +267,9 @@ public class ClientCommands {
                 }
 
                 if (!ElytraAutoPilot.activationAllowed(minecraftClient.player)) {
-                    minecraftClient.player.sendOverlayMessage(Component
-                            .translatable("text.elytraautopilot.autoFlightFail.tooLow").withStyle(ChatFormatting.RED));
+                    minecraftClient.player.sendOverlayMessage(
+                            Component.translatable(ElytraAutoPilot.activationFailureKey(minecraftClient.player))
+                                    .withStyle(ChatFormatting.RED));
                     return 1;
                 }
 

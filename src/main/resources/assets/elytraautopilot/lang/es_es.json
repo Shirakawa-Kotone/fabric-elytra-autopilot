@@ -143,6 +143,7 @@
   "text.elytraautopilot.flylocationFail.notFound": "¡Lugar=\"%s\" no existe!",
   "text.elytraautopilot.takeoffAbort.noFirework": "¡No hay fuegos artificiales en tu mano! Abortando despegue",
   "text.elytraautopilot.autoFlightFail.tooLow": "¡Estás muy bajo para activar el auto-vuelo!",
+  "text.elytraautopilot.autoFlightFail.noRoom": "No hay suficiente espacio debajo para volar el perfil del piloto automático aquí. El perfil gana velocidad picando y ese picado necesita varias decenas de bloques de espacio libre.",
   "text.elytraautopilot.swappedElytra": "Élitros intercambiadas",
   "text.elytraautopilot.hud.toggleAutoFlight": "Auto vuelo : ",
   "text.elytraautopilot.hud.true": "Activado",

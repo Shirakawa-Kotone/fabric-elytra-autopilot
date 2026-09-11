@@ -149,6 +149,7 @@
   "text.elytraautopilot.flylocationFail.notFound": "位置 \"%s\" 不存在!",
   "text.elytraautopilot.takeoffAbort.noFirework": "主手无烟花! 终止起飞",
   "text.elytraautopilot.autoFlightFail.tooLow": "高度过低, 无法启用自动飞行",
+  "text.elytraautopilot.autoFlightFail.noRoom": "下方净空不足，无法在这里飞自动飞行剖面：它靠俯冲攒速度，需要几十格离地空间才能做这个动作。",
   "text.elytraautopilot.swappedElytra": "已更换鞘翅",
   "text.elytraautopilot.hud.toggleAutoFlight": "自动飞行: ",
   "text.elytraautopilot.hud.true": "是",

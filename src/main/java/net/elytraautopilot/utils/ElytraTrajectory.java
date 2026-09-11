@@ -13,6 +13,7 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntToDoubleFunction;
 
 /**
  * Predicts where an elytra will actually fly instead of extending the current
@@ -274,6 +275,71 @@ public final class ElytraTrajectory {
             }
         }
         return simulation;
+    }
+
+    /**
+     * How far below the aircraft a dive to a target speed reaches, in blocks.
+     *
+     * <p>
+     * The flight profiles build their speed by diving, and a dive costs height. If
+     * the aircraft does not have that height underneath it, the profile cannot be
+     * flown: the dive ends in the ground. This is the number that says how much
+     * room a dive needs before it is worth starting.
+     *
+     * @param player
+     *            the flying player
+     * @param pitchDegrees
+     *            the attitude to dive at, in the usual Minecraft sense
+     * @param targetSpeed
+     *            speed to dive to, in blocks per tick
+     * @param maxTicks
+     *            give up after this many ticks
+     */
+    public static double diveDepth(Player player, float pitchDegrees, double targetSpeed, int maxTicks) {
+        return dip(player, tick -> pitchDegrees, targetSpeed, maxTicks);
+    }
+
+    /**
+     * How far below the aircraft a sequence of attitudes reaches, in blocks. Used
+     * for the precomputed strategy waveforms, whose dive is spread over a cycle
+     * rather than being one attitude.
+     *
+     * @param player
+     *            the flying player
+     * @param pitchAt
+     *            the attitude for each tick, in the usual Minecraft sense
+     * @param maxTicks
+     *            how many ticks of the sequence to fly
+     */
+    public static double lowestPoint(Player player, IntToDoubleFunction pitchAt, int maxTicks) {
+        return dip(player, pitchAt, Double.MAX_VALUE, maxTicks);
+    }
+
+    /**
+     * Flies a sequence of attitudes and reports the lowest point reached, in blocks
+     * below where the aircraft started. Stops early once the target speed is
+     * reached, when one is given.
+     */
+    private static double dip(Player player, IntToDoubleFunction pitchAt, double targetSpeed, int maxTicks) {
+        int limit = Mth.clamp(maxTicks, 1, MAX_TICKS);
+        Vec3 velocity = player.getDeltaMovement();
+        double startY = player.getY();
+        double y = startY;
+        double lowest = startY;
+        float yaw = player.getYRot();
+        double gravity = effectiveGravity(player);
+
+        for (int tick = 0; tick < limit; tick++) {
+            velocity = advance(velocity, (float) pitchAt.applyAsDouble(tick), yaw, gravity);
+            y += velocity.y;
+            if (y < lowest) {
+                lowest = y;
+            }
+            if (velocity.length() >= targetSpeed) {
+                break;
+            }
+        }
+        return startY - lowest;
     }
 
     /**

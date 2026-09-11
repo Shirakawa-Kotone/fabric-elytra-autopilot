@@ -151,6 +151,7 @@
   "text.elytraautopilot.flylocationFail.notFound": "Location \"%s\" does not exist!",
   "text.elytraautopilot.takeoffAbort.noFirework": "There are no fireworks in your hand! Aborting takeoff",
   "text.elytraautopilot.autoFlightFail.tooLow": "You're too low to activate auto-flight!",
+  "text.elytraautopilot.autoFlightFail.noRoom": "Not enough room below to fly the autopilot profile here. The profile gains speed by diving, and that dive needs a few dozen blocks of clearance.",
   "text.elytraautopilot.swappedElytra": "Swapped elytra",
   "text.elytraautopilot.hud.toggleAutoFlight": "Auto flight : ",
   "text.elytraautopilot.hud.true": "True",
