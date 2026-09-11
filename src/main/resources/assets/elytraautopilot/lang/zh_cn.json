@@ -112,7 +112,7 @@
   "config.elytraautopilot.avoidance.energyAware": "能量感知避障",
   "config.elytraautopilot.avoidance.energyAware.desc": "速度不足时先俯冲换取速度，等速度回来再拉起，而不是一直抬头失速撞上去",
   "config.elytraautopilot.avoidance.climbSpeedMargin": "爬升速度余量",
-  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "在“拉起后还能把高度换回来”的最低速度之上再加这么多（格/刻，×20 即 m/s）。达到这个速度后，避障会直接抬头爬升，不再先俯冲攒速。最低速度由鞘翅物理按当前重力自动算出。",
+  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "在“拉起后还能把一次爬升循环丢掉的高度换回来”的最低速度之上再加这么多（格/刻，×20 即 m/s）。鞘翅物理算出来这个最低速度约 2.2 格/刻（44 m/s）：爬升循环一次下滑要丢掉约 74 格高度，44 m/s 就是“俯冲到最低点还能爬回 74 格”的最低速度。达到该速度后避障直接抬头爬升，不再先俯冲攒速。阈值随玩家当前重力变化（缓降药水会明显降低它）。",
   "config.elytraautopilot.avoidance.giveUp": "无路可走时自动降落",
   "config.elytraautopilot.avoidance.giveUp.desc": "避障完全找不到绕开地形的方法时，自动转为降落",
   "config.elytraautopilot.avoidance.giveUpTicks": "避障放弃时间",

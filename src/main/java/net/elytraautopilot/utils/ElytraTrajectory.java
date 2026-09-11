@@ -63,18 +63,25 @@ public final class ElytraTrajectory {
     private static final double SLOW_FALLING_GRAVITY = 0.01;
 
     /** Ticks flown when testing whether a pull-up can still win height back. */
-    private static final int CLIMB_TEST_TICKS = 120;
+    private static final int CLIMB_TEST_TICKS = 400;
     /**
-     * How much height a pull-up has to win back, in blocks, before the aircraft
-     * counts as able to climb at all.
+     * How much height a pull-up has to win back, in blocks, to count as a climb
+     * worth choosing.
+     *
+     * <p>
+     * This is the height the mod's own climb cycle trades away in its dive - the
+     * strategy mode is built around a dive of about 74 blocks per cycle - so it is
+     * the height a pull-up has to buy back for the manoeuvre to pay for itself.
+     * Winning back less than that means the aircraft cannot actually maintain its
+     * height by climbing and is better off diving for speed first.
      */
-    private static final double CLIMB_TEST_GAIN = 1.0;
+    private static final double CLIMB_TEST_HEIGHT = 74.0;
     /** Pull-up attitudes tried by {@link #minimumClimbSpeed}, in degrees. */
     private static final double CLIMB_TEST_SHALLOWEST = 5.0;
     private static final double CLIMB_TEST_ANGLE_STEP = 5.0;
     /** Speed range scanned by {@link #minimumClimbSpeed}, in blocks per tick. */
     private static final double CLIMB_TEST_MIN_SPEED = 0.2;
-    private static final double CLIMB_TEST_MAX_SPEED = 2.0;
+    private static final double CLIMB_TEST_MAX_SPEED = 2.6;
     private static final double CLIMB_TEST_SPEED_STEP = 0.05;
 
     /** Cache for {@link #minimumClimbSpeed}, keyed on the flight conditions. */
@@ -371,13 +378,16 @@ public final class ElytraTrajectory {
      * climb back out of it, in blocks per tick (multiply by 20 for m/s).
      *
      * <p>
-     * The bottom of a dive is the moment the aircraft stops sinking: all of the
-     * height it traded away is now speed. A pull-up from there buys height back
-     * until the speed runs out, so for every speed there is a best pull-up attitude
-     * and a highest point it reaches. This returns the first speed at which that
-     * highest point is more than {@link #CLIMB_TEST_GAIN} above where the pull-up
-     * started - below it the aircraft cannot get back up at all, and pulling up
-     * only spends the last of its energy.
+     * The bottom of a dive is the moment the aircraft stops sinking: the height it
+     * traded away is now speed, and a pull-up buys height back until the speed runs
+     * out. For every speed there is a best pull-up attitude and a highest point it
+     * reaches; this returns the first speed at which that highest point is
+     * {@link #CLIMB_TEST_HEIGHT} blocks above where the pull-up started - the
+     * height the mod's own climb cycle gives away per dive. Below it the aircraft
+     * cannot hold its height by climbing at all and pulling up only spends the last
+     * of its energy; with the default attitude limit the answer is about 2.2 blocks
+     * per tick, or 44 m/s, which is just under the speed the dive cycle is built to
+     * reach.
      *
      * <p>
      * The attitude range is the one the autopilot is allowed to use, and the answer
@@ -396,7 +406,7 @@ public final class ElytraTrajectory {
         }
         double found = CLIMB_TEST_MAX_SPEED;
         for (double speed = CLIMB_TEST_MIN_SPEED; speed <= CLIMB_TEST_MAX_SPEED; speed += CLIMB_TEST_SPEED_STEP) {
-            if (canClimbBack(gravity, speed, angle)) {
+            if (winsBackHeight(gravity, speed, angle)) {
                 found = speed;
                 break;
             }
@@ -408,10 +418,10 @@ public final class ElytraTrajectory {
     }
 
     /**
-     * Whether a pull-up from level flight at this speed wins back any height at
-     * all, trying every attitude up to the given one.
+     * Whether a pull-up from the bottom of a dive at this speed wins back
+     * {@link #CLIMB_TEST_HEIGHT} blocks, trying every attitude up to the given one.
      */
-    private static boolean canClimbBack(double gravity, double speed, double maxClimbAngle) {
+    private static boolean winsBackHeight(double gravity, double speed, double maxClimbAngle) {
         for (double angle = CLIMB_TEST_SHALLOWEST; angle <= maxClimbAngle + 1.0e-6; angle += CLIMB_TEST_ANGLE_STEP) {
             Vec3 velocity = new Vec3(0.0, 0.0, speed);
             double height = 0.0;
@@ -421,9 +431,12 @@ public final class ElytraTrajectory {
                 height += velocity.y;
                 if (height > peak) {
                     peak = height;
+                } else if (velocity.y < 0.0) {
+                    // Sinking again and below the high point: the climb is over.
+                    break;
                 }
             }
-            if (peak >= CLIMB_TEST_GAIN) {
+            if (peak >= CLIMB_TEST_HEIGHT) {
                 return true;
             }
         }

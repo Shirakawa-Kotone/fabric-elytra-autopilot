@@ -88,7 +88,7 @@ public class ModConfig {
     public static final double avoidanceMaxDescentAngleDefault = 35.0;
     public static final double avoidancePitchRateDefault = 3.0;
     public static final boolean avoidanceEnergyAwareDefault = true;
-    public static final double avoidanceClimbSpeedMarginDefault = 0.15;
+    public static final double avoidanceClimbSpeedMarginDefault = 0.0;
     public static final boolean avoidanceGiveUpDefault = true;
     public static final int avoidanceGiveUpTicksDefault = 200;
     public static final double minAvoidanceLookahead = 0.5;

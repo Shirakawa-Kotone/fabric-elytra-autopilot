@@ -106,7 +106,7 @@
   "config.elytraautopilot.avoidance.energyAware": "Evitación según la energía",
   "config.elytraautopilot.avoidance.energyAware.desc": "Si va demasiado lento para subir, primero pica para ganar velocidad y luego asciende, en vez de entrar en pérdida contra el obstáculo",
   "config.elytraautopilot.avoidance.climbSpeedMargin": "Margen de velocidad de ascenso",
-  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "Velocidad extra, en bloques por tick (x20 = bloques por segundo), sumada a la velocidad mínima desde la que un tirón todavía recupera altura. A partir de esa suma la evitación asciende en vez de picar. La velocidad mínima la calcula el modelo de movimiento de la elytra con la gravedad actual.",
+  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "Velocidad extra, en bloques por tick (x20 = bloques por segundo), sumada a la velocidad mínima desde la que un tirón todavía recupera la altura que pierde un ciclo de ascenso. El modelo de movimiento de la elytra la sitúa en unos 2,2 bloques por tick (44 m/s): un ciclo de ascenso pierde unos 74 bloques en su picado, y 44 m/s es la velocidad más baja a la que, desde el fondo del picado, todavía se recuperan esos 74 bloques. A partir de ese umbral la evitación asciende en vez de picar para ganar velocidad. Sigue la gravedad actual del jugador, así que caída lenta lo reduce.",
   "config.elytraautopilot.avoidance.giveUp": "Aterrizar si no hay salida",
   "config.elytraautopilot.avoidance.giveUp.desc": "Aterriza automáticamente cuando la evitación no encuentra ninguna forma de superar el terreno",
   "config.elytraautopilot.avoidance.giveUpTicks": "Tiempo de renuncia",

@@ -114,7 +114,7 @@
   "config.elytraautopilot.avoidance.energyAware": "Speed-aware Avoidance",
   "config.elytraautopilot.avoidance.energyAware.desc": "When the aircraft is too slow to climb over an obstacle, dive first to build speed and pull up once it has it, instead of stalling against the obstacle",
   "config.elytraautopilot.avoidance.climbSpeedMargin": "Climb Speed Margin",
-  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "Extra speed, in blocks per tick (x20 = blocks per second), demanded on top of the slowest speed a pull-up can still climb back from. At or above that combined speed obstacle avoidance climbs instead of diving for speed first. The slowest speed is worked out from the elytra movement model for the current gravity.",
+  "config.elytraautopilot.avoidance.climbSpeedMargin.desc": "Extra speed, in blocks per tick (x20 = blocks per second), added to the slowest speed from which a pull-up can still win back the height a climb cycle trades away. The elytra movement model puts that at about 2.2 blocks per tick (44 m/s): the height a climb cycle gives away in its dive is about 74 blocks, and 44 m/s is the slowest the aircraft can be at the bottom of a dive and still climb 74 blocks back. At or above the threshold obstacle avoidance climbs instead of diving for speed. It follows the player's gravity, so slow falling moves it.",
   "config.elytraautopilot.avoidance.giveUp": "Land When Trapped",
   "config.elytraautopilot.avoidance.giveUp.desc": "Land automatically when obstacle avoidance runs out of ways past the terrain",
   "config.elytraautopilot.avoidance.giveUpTicks": "Avoidance Give-up Time",

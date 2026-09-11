@@ -136,6 +136,13 @@ public class ElytraAutoPilot implements ClientModInitializer {
                     + "Check that strategy CSV resources are present in the mod JAR.");
         }
 
+        // Work out the speed obstacle avoidance needs to climb with here, at
+        // startup, instead of in the middle of a flight: finding it simulates every
+        // pull-up attitude at every speed up to the threshold.
+        double climbThreshold = ElytraTrajectory.minimumClimbSpeed(0.08, ModConfig.INSTANCE.avoidanceMaxClimbAngle);
+        LOGGER.info("Minimum climb speed: {} blocks/tick ({} m/s): below it avoidance dives for speed first",
+                String.format("%.2f", climbThreshold), String.format("%.1f", climbThreshold * 20.0));
+
         KeyBindings.init();
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MODID, "hud"), (context, tickCounter) -> {
             ElytraAutoPilot.this.onScreenTick();
