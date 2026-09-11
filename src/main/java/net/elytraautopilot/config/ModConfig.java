@@ -83,24 +83,24 @@ public class ModConfig {
     // Obstacle avoidance defaults
     public static final boolean obstacleAvoidanceDefault = true;
     public static final double avoidanceLookaheadDefault = 5.0;
-    public static final double avoidanceClearanceDefault = 6.0;
+    public static final double avoidanceSeparationDefault = 2.0;
     public static final double avoidanceMaxClimbAngleDefault = 45.0;
     public static final double avoidanceMaxDescentAngleDefault = 35.0;
     public static final double avoidancePitchRateDefault = 3.0;
     public static final boolean avoidanceEnergyAwareDefault = true;
-    public static final double avoidanceClimbMinSpeedDefault = 1.45;
+    public static final double avoidanceClimbSpeedMarginDefault = 0.15;
     public static final boolean avoidanceGiveUpDefault = true;
     public static final int avoidanceGiveUpTicksDefault = 200;
     public static final double minAvoidanceLookahead = 0.5;
     public static final double maxAvoidanceLookahead = 30.0;
-    public static final double minAvoidanceClearance = 0.5;
-    public static final double maxAvoidanceClearance = 32.0;
+    public static final double minAvoidanceSeparation = 0.5;
+    public static final double maxAvoidanceSeparation = 32.0;
     public static final double minAvoidanceAngle = 0.0;
     public static final double maxAvoidanceAngle = 85.0;
     public static final double minAvoidancePitchRate = 0.1;
     public static final double maxAvoidancePitchRate = 15.0;
-    public static final double minAvoidanceClimbSpeed = 0.25;
-    public static final double maxAvoidanceClimbSpeed = 3.0;
+    public static final double minAvoidanceClimbSpeedMargin = 0.0;
+    public static final double maxAvoidanceClimbSpeedMargin = 1.0;
     public static final int minAvoidanceGiveUpTicks = 20;
     public static final int maxAvoidanceGiveUpTicks = 1200;
     public static final boolean showAvoidanceStatusDefault = true;
@@ -191,12 +191,12 @@ public class ModConfig {
     public int trajectoryPreviewTicks = trajectoryPreviewTicksDefault;
     public boolean obstacleAvoidance = obstacleAvoidanceDefault;
     public double avoidanceLookahead = avoidanceLookaheadDefault;
-    public double avoidanceClearance = avoidanceClearanceDefault;
+    public double avoidanceSeparation = avoidanceSeparationDefault;
     public double avoidanceMaxClimbAngle = avoidanceMaxClimbAngleDefault;
     public double avoidanceMaxDescentAngle = avoidanceMaxDescentAngleDefault;
     public double avoidancePitchRate = avoidancePitchRateDefault;
     public boolean avoidanceEnergyAware = avoidanceEnergyAwareDefault;
-    public double avoidanceClimbMinSpeed = avoidanceClimbMinSpeedDefault;
+    public double avoidanceClimbSpeedMargin = avoidanceClimbSpeedMarginDefault;
     public boolean avoidanceGiveUp = avoidanceGiveUpDefault;
     public int avoidanceGiveUpTicks = avoidanceGiveUpTicksDefault;
     public boolean dynamicActivation = dynamicActivationDefault;
@@ -603,13 +603,13 @@ public class ModConfig {
                                         .range(minAvoidanceLookahead, maxAvoidanceLookahead).step(0.5))
                                 .build())
                         .option(Option.<Double>createBuilder()
-                                .name(Component.translatable("config.elytraautopilot.avoidance.clearance"))
+                                .name(Component.translatable("config.elytraautopilot.avoidance.separation"))
                                 .description(OptionDescription
-                                        .of(Component.translatable("config.elytraautopilot.avoidance.clearance.desc")))
-                                .binding(avoidanceClearanceDefault, () -> ModConfig.INSTANCE.avoidanceClearance,
-                                        newVal -> ModConfig.INSTANCE.avoidanceClearance = newVal)
+                                        .of(Component.translatable("config.elytraautopilot.avoidance.separation.desc")))
+                                .binding(avoidanceSeparationDefault, () -> ModConfig.INSTANCE.avoidanceSeparation,
+                                        newVal -> ModConfig.INSTANCE.avoidanceSeparation = newVal)
                                 .controller(opt -> DoubleSliderControllerBuilder.create(opt)
-                                        .range(minAvoidanceClearance, maxAvoidanceClearance).step(0.5))
+                                        .range(minAvoidanceSeparation, maxAvoidanceSeparation).step(0.5))
                                 .build())
                         .option(Option.<Double>createBuilder()
                                 .name(Component.translatable("config.elytraautopilot.avoidance.maxClimbAngle"))
@@ -647,13 +647,14 @@ public class ModConfig {
                                         newVal -> ModConfig.INSTANCE.avoidanceEnergyAware = newVal)
                                 .controller(BooleanControllerBuilder::create).build())
                         .option(Option.<Double>createBuilder()
-                                .name(Component.translatable("config.elytraautopilot.avoidance.climbMinSpeed"))
-                                .description(OptionDescription.of(
-                                        Component.translatable("config.elytraautopilot.avoidance.climbMinSpeed.desc")))
-                                .binding(avoidanceClimbMinSpeedDefault, () -> ModConfig.INSTANCE.avoidanceClimbMinSpeed,
-                                        newVal -> ModConfig.INSTANCE.avoidanceClimbMinSpeed = newVal)
+                                .name(Component.translatable("config.elytraautopilot.avoidance.climbSpeedMargin"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.avoidance.climbSpeedMargin.desc")))
+                                .binding(avoidanceClimbSpeedMarginDefault,
+                                        () -> ModConfig.INSTANCE.avoidanceClimbSpeedMargin,
+                                        newVal -> ModConfig.INSTANCE.avoidanceClimbSpeedMargin = newVal)
                                 .controller(opt -> DoubleSliderControllerBuilder.create(opt)
-                                        .range(minAvoidanceClimbSpeed, maxAvoidanceClimbSpeed).step(0.05))
+                                        .range(minAvoidanceClimbSpeedMargin, maxAvoidanceClimbSpeedMargin).step(0.05))
                                 .build())
                         .option(Option.<Boolean>createBuilder()
                                 .name(Component.translatable("config.elytraautopilot.avoidance.giveUp"))

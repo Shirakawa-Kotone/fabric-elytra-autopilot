@@ -61,6 +61,27 @@ public final class ElytraTrajectory {
     private static final double BODY_HIGH = 1.5;
     /** Slow falling clamps gravity to this value. */
     private static final double SLOW_FALLING_GRAVITY = 0.01;
+
+    /** Ticks flown when testing whether a pull-up can still win height back. */
+    private static final int CLIMB_TEST_TICKS = 120;
+    /**
+     * How much height a pull-up has to win back, in blocks, before the aircraft
+     * counts as able to climb at all.
+     */
+    private static final double CLIMB_TEST_GAIN = 1.0;
+    /** Pull-up attitudes tried by {@link #minimumClimbSpeed}, in degrees. */
+    private static final double CLIMB_TEST_SHALLOWEST = 5.0;
+    private static final double CLIMB_TEST_ANGLE_STEP = 5.0;
+    /** Speed range scanned by {@link #minimumClimbSpeed}, in blocks per tick. */
+    private static final double CLIMB_TEST_MIN_SPEED = 0.2;
+    private static final double CLIMB_TEST_MAX_SPEED = 2.0;
+    private static final double CLIMB_TEST_SPEED_STEP = 0.05;
+
+    /** Cache for {@link #minimumClimbSpeed}, keyed on the flight conditions. */
+    private static double cachedClimbGravity = Double.NaN;
+    private static double cachedClimbAngle = Double.NaN;
+    private static double cachedClimbSpeed = Double.NaN;
+
     private ElytraTrajectory() {
     }
 
@@ -123,6 +144,23 @@ public final class ElytraTrajectory {
     }
 
     /**
+     * Room kept between the swept path and terrain, in blocks: {@code above} over
+     * the aircraft's head and {@code below} underneath its feet.
+     *
+     * <p>
+     * Both matter. The room overhead catches ceilings and overhangs; the room
+     * underneath is what stops the aircraft from skimming a ridge - a path that
+     * clears the ground by a hand's width does not hit anything, but it grazes, and
+     * grazing at elytra speed is a crash waiting for a rounding error.
+     */
+    public record Envelope(double above, double below) {
+        /** An envelope with the same room above and below. */
+        public static Envelope of(double clearance) {
+            return new Envelope(clearance, clearance);
+        }
+    }
+
+    /**
      * Flies the player forward with a fixed attitude and reports what the path runs
      * into.
      *
@@ -135,11 +173,11 @@ public final class ElytraTrajectory {
      *            hard limit on simulated ticks
      * @param maxDistance
      *            stop once this much distance has been covered, in blocks
-     * @param clearance
-     *            extra head room kept above the player, in blocks
+     * @param envelope
+     *            room kept between the path and terrain, in blocks
      */
-    public static Result scan(Player player, float pitchDegrees, int maxTicks, double maxDistance, double clearance) {
-        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, clearance, false);
+    public static Result scan(Player player, float pitchDegrees, int maxTicks, double maxDistance, Envelope envelope) {
+        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, envelope, false);
         return new Result(simulation.collision, simulation.reachedGoal, simulation.travelled, simulation.endPosition);
     }
 
@@ -156,17 +194,17 @@ public final class ElytraTrajectory {
      *            hard limit on simulated ticks
      * @param maxDistance
      *            stop once this much distance has been covered, in blocks
-     * @param clearance
-     *            extra head room kept above the player, in blocks (0 for the real
-     *            flight path)
+     * @param envelope
+     *            room kept between the path and terrain, in blocks (an empty
+     *            envelope checks the real flight path exactly as it is flown)
      */
-    public static Path trace(Player player, float pitchDegrees, int maxTicks, double maxDistance, double clearance) {
-        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, clearance, true);
+    public static Path trace(Player player, float pitchDegrees, int maxTicks, double maxDistance, Envelope envelope) {
+        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, envelope, true);
         return new Path(simulation.points, simulation.collision, simulation.travelled);
     }
 
     private static Simulation simulate(Player player, float pitchDegrees, int maxTicks, double maxDistance,
-            double clearance, boolean collectPoints) {
+            Envelope envelope, boolean collectPoints) {
         Simulation simulation = new Simulation();
         if (collectPoints) {
             simulation.points = new ArrayList<>();
@@ -204,7 +242,7 @@ public final class ElytraTrajectory {
                 break;
             }
             if (tick % COLLISION_STEP == 0) {
-                if (hitsTerrain(level, player, checkX, checkY, checkZ, nextX, nextY, nextZ, clearance)) {
+                if (hitsTerrain(level, player, checkX, checkY, checkZ, nextX, nextY, nextZ, envelope)) {
                     simulation.collision = true;
                     break;
                 }
@@ -319,7 +357,7 @@ public final class ElytraTrajectory {
     }
 
     /** A port of {@code LivingEntity.getEffectiveGravity}. */
-    private static double effectiveGravity(Player player) {
+    public static double effectiveGravity(Player player) {
         double gravity = player.getAttributeValue(Attributes.GRAVITY);
         boolean falling = player.getDeltaMovement().y <= 0.0;
         if (falling && player.hasEffect(MobEffects.SLOW_FALLING)) {
@@ -328,15 +366,85 @@ public final class ElytraTrajectory {
         return gravity;
     }
 
+    /**
+     * The slowest the aircraft may be at the bottom of a dive and still be able to
+     * climb back out of it, in blocks per tick (multiply by 20 for m/s).
+     *
+     * <p>
+     * The bottom of a dive is the moment the aircraft stops sinking: all of the
+     * height it traded away is now speed. A pull-up from there buys height back
+     * until the speed runs out, so for every speed there is a best pull-up attitude
+     * and a highest point it reaches. This returns the first speed at which that
+     * highest point is more than {@link #CLIMB_TEST_GAIN} above where the pull-up
+     * started - below it the aircraft cannot get back up at all, and pulling up
+     * only spends the last of its energy.
+     *
+     * <p>
+     * The attitude range is the one the autopilot is allowed to use, and the answer
+     * only changes with gravity, so it is cached. This is the threshold obstacle
+     * avoidance uses to decide between climbing and diving for speed.
+     *
+     * @param gravity
+     *            effective gravity of the player
+     * @param maxClimbAngle
+     *            steepest pull-up the autopilot may command, in degrees
+     */
+    public static double minimumClimbSpeed(double gravity, double maxClimbAngle) {
+        double angle = Mth.clamp(maxClimbAngle, CLIMB_TEST_SHALLOWEST, 85.0);
+        if (gravity == cachedClimbGravity && angle == cachedClimbAngle) {
+            return cachedClimbSpeed;
+        }
+        double found = CLIMB_TEST_MAX_SPEED;
+        for (double speed = CLIMB_TEST_MIN_SPEED; speed <= CLIMB_TEST_MAX_SPEED; speed += CLIMB_TEST_SPEED_STEP) {
+            if (canClimbBack(gravity, speed, angle)) {
+                found = speed;
+                break;
+            }
+        }
+        cachedClimbGravity = gravity;
+        cachedClimbAngle = angle;
+        cachedClimbSpeed = found;
+        return found;
+    }
+
+    /**
+     * Whether a pull-up from level flight at this speed wins back any height at
+     * all, trying every attitude up to the given one.
+     */
+    private static boolean canClimbBack(double gravity, double speed, double maxClimbAngle) {
+        for (double angle = CLIMB_TEST_SHALLOWEST; angle <= maxClimbAngle + 1.0e-6; angle += CLIMB_TEST_ANGLE_STEP) {
+            Vec3 velocity = new Vec3(0.0, 0.0, speed);
+            double height = 0.0;
+            double peak = 0.0;
+            for (int tick = 0; tick < CLIMB_TEST_TICKS; tick++) {
+                velocity = advance(velocity, (float) -angle, 0.0f, gravity);
+                height += velocity.y;
+                if (height > peak) {
+                    peak = height;
+                }
+            }
+            if (peak >= CLIMB_TEST_GAIN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean hitsTerrain(Level level, Player player, double fromX, double fromY, double fromZ, double toX,
-            double toY, double toZ, double clearance) {
+            double toY, double toZ, Envelope envelope) {
         if (segmentHits(level, player, fromX, fromY + BODY_LOW, fromZ, toX, toY + BODY_LOW, toZ)
                 || segmentHits(level, player, fromX, fromY + BODY_HIGH, fromZ, toX, toY + BODY_HIGH, toZ)) {
             return true;
         }
-        // A safety clearance is kept as extra head room above the aircraft.
-        return clearance > 0.0 && segmentHits(level, player, fromX, fromY + BODY_HIGH + clearance, fromZ, toX,
-                toY + BODY_HIGH + clearance, toZ);
+        // Room kept above the aircraft, which catches ceilings and overhangs.
+        if (envelope.above() > 0.0 && segmentHits(level, player, fromX, fromY + BODY_HIGH + envelope.above(), fromZ,
+                toX, toY + BODY_HIGH + envelope.above(), toZ)) {
+            return true;
+        }
+        // Room kept underneath it: terrain the path would pass over has to stay at
+        // least this far below the feet, otherwise the pass is a graze.
+        return envelope.below() > 0.0
+                && segmentHits(level, player, fromX, fromY - envelope.below(), fromZ, toX, toY - envelope.below(), toZ);
     }
 
     private static boolean segmentHits(Level level, Player player, double fromX, double fromY, double fromZ, double toX,

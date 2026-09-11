@@ -71,9 +71,11 @@ public final class TrajectoryRenderer {
     private static void draw(Player player) {
         float pitch = ObstacleAvoidance.isActive() ? ObstacleAvoidance.getTargetPitch() : player.getXRot();
         int ticks = Mth.clamp(ModConfig.INSTANCE.trajectoryPreviewTicks, MIN_PREVIEW_TICKS, ElytraTrajectory.MAX_TICKS);
-        // Clearance 0: this is the path the aircraft really flies, not the safety
-        // envelope obstacle avoidance keeps around it.
-        ElytraTrajectory.Path path = ElytraTrajectory.trace(player, pitch, ticks, Double.MAX_VALUE, 0.0);
+        // The drawn line is the path the aircraft really flies, but it is checked
+        // with the same safety margin obstacle avoidance uses, so it ends - and
+        // turns red - where the autopilot would consider the path too close.
+        ElytraTrajectory.Path path = ElytraTrajectory.trace(player, pitch, ticks, Double.MAX_VALUE,
+                ElytraTrajectory.Envelope.of(Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.0, 32.0)));
         List<Vec3> points = path.points;
         if (points.size() < 2) {
             return;

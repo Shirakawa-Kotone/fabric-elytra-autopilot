@@ -797,10 +797,10 @@ public class ElytraAutoPilot implements ClientModInitializer {
         if (!player.isFallFlying()) {
             return false;
         }
-        double clearance = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
+        double clearance = Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.0, 32.0);
         if (ModConfig.INSTANCE.trajectoryPrediction) {
             ElytraTrajectory.Result result = ElytraTrajectory.scan(player, player.getXRot(), ElytraTrajectory.MAX_TICKS,
-                    ACTIVATION_LOOKAHEAD, clearance);
+                    ACTIVATION_LOOKAHEAD, ElytraTrajectory.Envelope.of(clearance));
             return !result.collision;
         }
         return ObstacleAvoidance.landingPathClearance(player, player.getYRot(), player.getXRot(),

@@ -1,6 +1,7 @@
 package net.elytraautopilot.utils;
 
 import net.elytraautopilot.config.ModConfig;
+import net.elytraautopilot.utils.ElytraTrajectory.Envelope;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
@@ -164,6 +165,11 @@ public final class ObstacleAvoidance {
     /** Speed measured for the current tick, in blocks per tick. */
     private static double currentSpeed = 0.0;
     /**
+     * Speed at which the aircraft can still climb back out of a dive, in blocks per
+     * tick, worked out from the movement model for the current gravity.
+     */
+    private static double climbSpeed = 0.0;
+    /**
      * Ticks for which no attitude has been found that gets past the obstacle. Time
      * spent merely blocked does not count: terrain-following can stay engaged for
      * minutes, and only being out of options is worth giving up over.
@@ -218,7 +224,10 @@ public final class ObstacleAvoidance {
             release();
             return;
         }
-        currentSpeed = speed;
+        // The escape decision is made on the horizontal speed: that is what the
+        // pull-up trades away for height. Vertical speed is only stored energy.
+        currentSpeed = horizontalSpeed;
+        climbSpeed = climbSpeedThreshold(player);
 
         double lookahead = Mth.clamp(speed * ModConfig.INSTANCE.avoidanceLookahead * 20.0, MIN_LOOKAHEAD,
                 MAX_LOOKAHEAD);
@@ -239,12 +248,35 @@ public final class ObstacleAvoidance {
      * the resulting path for terrain.
      */
     private static void tickPredicted(Player player, double lookahead, float normalAttitude) {
-        double margin = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
+        Envelope envelope = envelope();
         update(player.getXRot(), normalAttitude, pitch -> {
             ElytraTrajectory.Result result = ElytraTrajectory.scan(player, pitch, ElytraTrajectory.MAX_TICKS, lookahead,
-                    margin);
+                    envelope);
             return new Probe(result.travelledDistance, result.collision);
         });
+    }
+
+    /**
+     * Room the predicted path has to keep from terrain: at least the configured
+     * separation, in both directions, so a path that would graze a ridge counts as
+     * blocked instead of clear.
+     */
+    private static Envelope envelope() {
+        return Envelope.of(Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.0, 32.0));
+    }
+
+    /**
+     * The speed, in blocks per tick, at which the aircraft can still climb back out
+     * of the bottom of a dive, plus the configured margin. Obstacle avoidance
+     * climbs instead of diving for speed at or above it. Worked out from the
+     * movement model for the player's current gravity, so a slow falling potion
+     * moves it.
+     */
+    private static double climbSpeedThreshold(Player player) {
+        double margin = ModConfig.INSTANCE.avoidanceClimbSpeedMargin;
+        double gravity = ElytraTrajectory.effectiveGravity(player);
+        return ElytraTrajectory.minimumClimbSpeed(gravity, ModConfig.INSTANCE.avoidanceMaxClimbAngle)
+                + Math.max(0.0, margin);
     }
 
     /** Scores attitudes with a fan of ray casts along the current heading. */
@@ -373,10 +405,9 @@ public final class ObstacleAvoidance {
     private static void searchEscape(float currentPitch, EscapeScore score) {
         double maxClimb = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxClimbAngle, 0.0, 85.0);
         double maxDescent = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxDescentAngle, 0.0, 85.0);
-        // Too slow to trade for height: a pull-up would only spend the speed that is
-        // left. See the tie-break below.
-        boolean lowEnergy = ModConfig.INSTANCE.avoidanceEnergyAware
-                && currentSpeed < Mth.clamp(ModConfig.INSTANCE.avoidanceClimbMinSpeed, 0.0, 5.0);
+        // Below the speed at which a pull-up can still win height back, pulling up
+        // would only spend the little energy that is left. See the tie-break below.
+        boolean lowEnergy = ModConfig.INSTANCE.avoidanceEnergyAware && currentSpeed < climbSpeed;
         Action descentAction = lowEnergy ? Action.DIVE : Action.DESCEND;
 
         // 1) Pull up: shallowest climb first, so the aircraft deviates least.
@@ -412,11 +443,14 @@ public final class ObstacleAvoidance {
             }
         }
 
-        // 3) Nothing gets past the obstacle. Keep whatever buys the most room, and
-        // stay with the attitude already committed to unless another one is clearly
-        // better - otherwise the escape flickers between candidates every tick and
-        // that shows up as the nose shaking. A slow aircraft dives for speed here:
-        // the climb it cannot finish still costs it the speed it has left.
+        // 3) Nothing gets past the obstacle. Stay with the attitude already committed
+        // to unless another one is clearly better - otherwise the escape flickers
+        // between candidates every tick and that shows up as the nose shaking.
+        //
+        // With enough speed to climb back out of a dive the aircraft pulls up: that
+        // is the attitude that wins height, and the height is what it needs. Below
+        // that speed a pull-up cannot win any height back, so it dives for speed
+        // instead and pulls up by itself once it has it.
         double bestPitch = Double.NaN;
         double bestDistance = -1.0;
         Action bestAction = Action.EVADE;
@@ -426,7 +460,7 @@ public final class ObstacleAvoidance {
             bestPitch = bestDescentPitch;
             bestDistance = bestDescentDistance;
             bestAction = Action.DIVE;
-        } else if (!Double.isNaN(bestClimbPitch) && bestClimbDistance >= bestDescentDistance) {
+        } else if (!Double.isNaN(bestClimbPitch)) {
             bestPitch = bestClimbPitch;
             bestDistance = bestClimbDistance;
             bestAction = Action.CLIMB;
@@ -466,8 +500,12 @@ public final class ObstacleAvoidance {
             return true;
         }
         if (ModConfig.INSTANCE.trajectoryPrediction) {
+            // The approach is meant to end on the ground, so only the room above the
+            // path is required; keeping the separation underneath would report the
+            // runway the aircraft is aiming at as an obstacle.
+            Envelope envelope = new Envelope(Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.0, 32.0), 0.0);
             ElytraTrajectory.Result result = ElytraTrajectory.scan(player, (float) pitchDegrees,
-                    ElytraTrajectory.MAX_TICKS, pathLength, ModConfig.INSTANCE.avoidanceClearance);
+                    ElytraTrajectory.MAX_TICKS, pathLength, envelope);
             if (!result.collision) {
                 return true;
             }
@@ -507,7 +545,7 @@ public final class ObstacleAvoidance {
      * which terrain is hit.
      */
     private static double clearance(Level level, Player player, Vec3 origin, float yaw, float pitch, double distance) {
-        double lateralMargin = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.5, 32.0);
+        double lateralMargin = Mth.clamp(ModConfig.INSTANCE.avoidanceSeparation, 0.5, 32.0);
         double sideAngle = Mth.clamp(Math.toDegrees(Math.atan2(lateralMargin, Math.max(distance, 1.0))), MIN_FAN_ANGLE,
                 MAX_FAN_ANGLE);
 

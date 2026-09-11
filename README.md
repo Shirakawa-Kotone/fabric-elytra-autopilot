@@ -39,16 +39,20 @@ Enabled by default under **Trajectory Prediction**. The mod does not extend your
 
 Both systems below use that prediction. Turning the option off falls back to the simpler ray/geometric behaviour.
 
-The predicted path is also drawn in the world while you are flying (**Show Predicted Trajectory**, on by default). The line starts at the aircraft, follows exactly the path the movement model produces for the attitude being commanded, and fades towards red where it ends in terrain - so you can see the problem before the aircraft has to do anything about it. While obstacle avoidance owns the pitch the line shows the escape attitude it picked, and **Trajectory Preview Length** controls how far ahead it is drawn. The line is depth tested, so it disappears behind a hill exactly where the aircraft would.
+The predicted path is also drawn in the world while you are flying (**Show Predicted Trajectory**, on by default). The line starts at the aircraft and follows exactly the path the movement model produces for the attitude being commanded. It is checked with the same safety margin obstacle avoidance uses, so it turns red - and stops - where the autopilot would consider the path too close to terrain, which is the warning you want rather than a line that quietly ends in a hillside. While obstacle avoidance owns the pitch the line shows the escape attitude it picked, and **Trajectory Preview Length** controls how far ahead it is drawn. The line is depth tested, so it disappears behind a hill exactly where the aircraft would.
 
 ### Obstacle Avoidance
 Enabled by default and configurable under **Obstacle Avoidance** in the config screen. While Auto Flight is running the mod flies the predicted path ahead (5 seconds of flight by default) and, if it ends in terrain, searches for an escape attitude by simulating each candidate with the same model. It pitches the nose **up** towards the shallowest climb that actually clears the obstacle; if there is nothing to climb over - for example underneath a Nether ceiling - it pitches the nose **down** instead. The HUD shows what it is doing (`Avoiding terrain: climbing (74 blocks ahead)`).
+
+A path only counts as clear if it keeps **Minimum Terrain Separation** (2 blocks by default) from terrain, above the aircraft *and* underneath it. Without the room underneath, a path that clears a ridge by a hand's width is not a collision - but it grazes, and grazing at elytra speed is a crash waiting for a rounding error. Raising the setting makes avoidance react earlier and fly wider; lowering it lets the aircraft skim.
 
 When the aircraft is short of speed, avoidance works up a ladder instead of just holding the steepest climb:
 
 1. **Enough speed, or a pull-up actually clears** - climb straight away.
 2. **Too slow to climb and no climb clears** - dive for speed (`diving for speed` in the HUD) and pull up by itself once the speed is back. A slow pull-up only spends the last of the energy the aircraft has, and this is the same dive-then-climb trade the precomputed climb waveform uses. Turning off **Speed-aware Avoidance** restores the old behaviour of always trying to climb.
 3. **Nothing gets past the obstacle at all** - avoidance gives up and puts the aircraft on the ground under control (`No way past the terrain - landing!`) rather than flying it into the wall. This happens immediately when the obstacle is only a few blocks away, or after **Avoidance Give-up Time** (10 s by default) of having no attitude that buys any real room. **Land When Trapped** turns it off.
+
+"Too slow" is not a guessed number. It is computed from the movement model: the slowest speed at which a pull-up from the bottom of a dive still wins height back (about **0.75 blocks/tick, 15 m/s** with the default attitude limit, measured by simulating every pull-up attitude and taking the best). Above that speed plus **Climb Speed Margin** (3 m/s by default), avoidance climbs; below it, it dives. The number follows the player's gravity, so a slow falling potion moves it.
 
 Note that a pitch-only escape is limited by physics: from cruise speed an elytra cannot climb very steeply without first trading speed for height, so a wall that rears up immediately in front may be unavoidable by pitching alone. Step 2 gets much closer to it, but a turn would be the real answer; there is no yaw-based avoidance.
 
