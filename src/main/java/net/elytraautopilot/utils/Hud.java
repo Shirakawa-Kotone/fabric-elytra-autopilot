@@ -182,7 +182,9 @@ public class Hud {
             }
 
             if (ModConfig.INSTANCE.showHeightReq) {
-                boolean ready = groundheight > ModConfig.INSTANCE.minHeight;
+                // Dynamic activation can make the autopilot ready to start below the
+                // configured height, as long as the path ahead is clear.
+                boolean ready = activationAllowed(player);
                 String req = ready ? "Ready" : String.valueOf(Math.round(ModConfig.INSTANCE.minHeight - groundheight));
                 lines.add(Component.translatable("text.elytraautopilot.hud.neededHeight").withStyle(ChatFormatting.AQUA)
                         .append(Component.literal(req).withStyle(ready ? ChatFormatting.GREEN : ChatFormatting.RED)));

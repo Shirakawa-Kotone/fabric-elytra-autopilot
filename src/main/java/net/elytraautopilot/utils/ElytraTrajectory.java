@@ -11,6 +11,9 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Predicts where an elytra will actually fly instead of extending the current
  * heading in a straight line.
@@ -93,6 +96,33 @@ public final class ElytraTrajectory {
     }
 
     /**
+     * A predicted flight path kept as a polyline, so it can be drawn on screen.
+     */
+    public static final class Path {
+        /** Sampled positions along the path, starting at the aircraft. */
+        public final List<Vec3> points;
+        /** Whether the path ran into terrain (or the bottom of the world). */
+        public final boolean collision;
+        /** Distance flown along the path, in blocks. */
+        public final double travelledDistance;
+
+        private Path(List<Vec3> points, boolean collision, double travelledDistance) {
+            this.points = points;
+            this.collision = collision;
+            this.travelledDistance = travelledDistance;
+        }
+    }
+
+    /** Internal working set shared by {@link #scan} and {@link #trace}. */
+    private static final class Simulation {
+        private List<Vec3> points;
+        private boolean collision;
+        private boolean reachedGoal;
+        private double travelled;
+        private Vec3 endPosition = Vec3.ZERO;
+    }
+
+    /**
      * Flies the player forward with a fixed attitude and reports what the path runs
      * into.
      *
@@ -109,6 +139,40 @@ public final class ElytraTrajectory {
      *            extra head room kept above the player, in blocks
      */
     public static Result scan(Player player, float pitchDegrees, int maxTicks, double maxDistance, double clearance) {
+        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, clearance, false);
+        return new Result(simulation.collision, simulation.reachedGoal, simulation.travelled, simulation.endPosition);
+    }
+
+    /**
+     * The same simulation as {@link #scan}, but the flown positions are kept as a
+     * polyline. Used to show the predicted trajectory on screen.
+     *
+     * @param player
+     *            the flying player
+     * @param pitchDegrees
+     *            the attitude to hold, in the usual Minecraft sense (positive is
+     *            nose down)
+     * @param maxTicks
+     *            hard limit on simulated ticks
+     * @param maxDistance
+     *            stop once this much distance has been covered, in blocks
+     * @param clearance
+     *            extra head room kept above the player, in blocks (0 for the real
+     *            flight path)
+     */
+    public static Path trace(Player player, float pitchDegrees, int maxTicks, double maxDistance, double clearance) {
+        Simulation simulation = simulate(player, pitchDegrees, maxTicks, maxDistance, clearance, true);
+        return new Path(simulation.points, simulation.collision, simulation.travelled);
+    }
+
+    private static Simulation simulate(Player player, float pitchDegrees, int maxTicks, double maxDistance,
+            double clearance, boolean collectPoints) {
+        Simulation simulation = new Simulation();
+        if (collectPoints) {
+            simulation.points = new ArrayList<>();
+            simulation.points.add(player.position());
+        }
+
         int limit = Mth.clamp(maxTicks, 1, MAX_TICKS);
         Vec3 velocity = player.getDeltaMovement();
         double positionX = player.getX();
@@ -123,41 +187,48 @@ public final class ElytraTrajectory {
         double checkX = positionX;
         double checkY = positionY;
         double checkZ = positionZ;
-        double travelled = 0.0;
-        boolean collision = false;
-        boolean reachedGoal = false;
 
         for (int tick = 1; tick <= limit; tick++) {
             velocity = advance(velocity, pitchDegrees, yaw, gravity);
             double nextX = positionX + velocity.x;
             double nextY = positionY + velocity.y;
             double nextZ = positionZ + velocity.z;
-            travelled += Math.sqrt(
+            simulation.travelled += Math.sqrt(
                     Mth.square(nextX - positionX) + Mth.square(nextY - positionY) + Mth.square(nextZ - positionZ));
             positionX = nextX;
             positionY = nextY;
             positionZ = nextZ;
 
             if (nextY < minY) {
-                collision = true;
+                simulation.collision = true;
                 break;
             }
             if (tick % COLLISION_STEP == 0) {
                 if (hitsTerrain(level, player, checkX, checkY, checkZ, nextX, nextY, nextZ, clearance)) {
-                    collision = true;
+                    simulation.collision = true;
                     break;
                 }
                 checkX = nextX;
                 checkY = nextY;
                 checkZ = nextZ;
+                if (collectPoints) {
+                    simulation.points.add(new Vec3(nextX, nextY, nextZ));
+                }
             }
-            if (travelled >= maxDistance) {
-                reachedGoal = true;
+            if (simulation.travelled >= maxDistance) {
+                simulation.reachedGoal = true;
                 break;
             }
         }
 
-        return new Result(collision, reachedGoal, travelled, new Vec3(positionX, positionY, positionZ));
+        simulation.endPosition = new Vec3(positionX, positionY, positionZ);
+        if (collectPoints) {
+            Vec3 last = simulation.points.get(simulation.points.size() - 1);
+            if (last.distanceToSqr(simulation.endPosition) > 1.0e-6) {
+                simulation.points.add(simulation.endPosition);
+            }
+        }
+        return simulation;
     }
 
     /**

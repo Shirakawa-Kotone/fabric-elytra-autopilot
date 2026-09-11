@@ -11,6 +11,7 @@ import net.elytraautopilot.utils.Hud;
 import net.elytraautopilot.utils.HudRenderer;
 import net.elytraautopilot.utils.KeyBindings;
 import net.elytraautopilot.utils.ObstacleAvoidance;
+import net.elytraautopilot.utils.TrajectoryRenderer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -96,6 +97,17 @@ public class ElytraAutoPilot implements ClientModInitializer {
     private static final int DIRECT_LANDING_SOLVER_TICKS = 120;
     /** Bisection steps used to invert the elytra movement model. */
     private static final int DIRECT_LANDING_SOLVER_ITERATIONS = 9;
+
+    /**
+     * How far ahead the dynamic activation check looks, in blocks. Long enough to
+     * cover a few seconds of flight, which is what the aircraft has to fly before
+     * its own controllers or obstacle avoidance can act.
+     */
+    private static final double ACTIVATION_LOOKAHEAD = 120.0;
+
+    /** Cached result of the activatable-path check for the current tick. */
+    private static int activationCheckTick = Integer.MIN_VALUE;
+    private static boolean activationCheckResult = false;
 
     /** Cached result of the straight-in landing path check for the current tick. */
     private static int directLandingCheckTick = Integer.MIN_VALUE;
@@ -541,6 +553,18 @@ public class ElytraAutoPilot implements ClientModInitializer {
                 ObstacleAvoidance.clear();
             }
 
+            boolean avoidanceGaveUp = ObstacleAvoidance.consumeLandingRequest();
+            if (avoidanceGaveUp && !isLanding && !forceLand) {
+                // Avoidance has run out of ways around the terrain: put the aircraft
+                // on the ground under control instead of holding a pitch that is
+                // going to end in it.
+                player.sendOverlayMessage(
+                        Component.translatable("text.elytraautopilot.avoidanceLanding").withStyle(ChatFormatting.RED));
+                announceLanding(player);
+                minecraftClient.options.keyUse.setDown(false);
+                forceLand = true;
+            }
+
             // Strategy mode applies its own pitch here; the classic controller applies
             // it every frame in onScreenTick.
             if (strategyActive && !ObstacleAvoidance.isActive()) {
@@ -570,7 +594,7 @@ public class ElytraAutoPilot implements ClientModInitializer {
 
         if (!configPressed && KeyBindings.configBinding.isDown()) {
             if (player.isFallFlying()) {
-                if (!autoFlight && groundheight < ModConfig.INSTANCE.minHeight) {
+                if (!autoFlight && !activationAllowed(player)) {
                     player.sendOverlayMessage(Component.translatable("text.elytraautopilot.autoFlightFail.tooLow")
                             .withStyle(ChatFormatting.RED));
                     doGlide = true;
@@ -614,6 +638,7 @@ public class ElytraAutoPilot implements ClientModInitializer {
         if (calculateHud) {
             computeVelocity();
             Hud.drawHud(player);
+            TrajectoryRenderer.render(player);
         } else {
             previousPosition = null;
             Hud.clearHud();
@@ -728,6 +753,58 @@ public class ElytraAutoPilot implements ClientModInitializer {
         SoundEvent soundEvent = SoundEvent
                 .createVariableRangeEvent(Identifier.parse(ModConfig.INSTANCE.playSoundOnLanding));
         player.playSound(soundEvent, 1.3f, 1f);
+    }
+
+    /**
+     * May auto-flight be switched on from where the aircraft is now?
+     *
+     * <p>
+     * By default the aircraft must be above the configured minimum height. With
+     * dynamic activation that is not required: a path that is predicted to be clear
+     * for the next few seconds is enough, which is what makes it possible to start
+     * the autopilot in terrain that is high but not dangerous - the aircraft only
+     * has to get past what is in front of it, not climb into the sky first.
+     */
+    public static boolean activationAllowed(Player player) {
+        if (groundheight > ModConfig.INSTANCE.minHeight) {
+            return true;
+        }
+        if (!ModConfig.INSTANCE.dynamicActivation) {
+            return false;
+        }
+        return dynamicActivationAllowed(player);
+    }
+
+    /**
+     * Whether the flight path ahead is clear, which is the whole activation
+     * criterion in dynamic mode. Cached per tick: the HUD and the key handler both
+     * ask for it, and the controllers run once per frame.
+     */
+    public static boolean dynamicActivationAllowed(Player player) {
+        if (player == null) {
+            return false;
+        }
+        int tick = player.tickCount;
+        if (tick == activationCheckTick) {
+            return activationCheckResult;
+        }
+        activationCheckTick = tick;
+        activationCheckResult = computeDynamicActivation(player);
+        return activationCheckResult;
+    }
+
+    private static boolean computeDynamicActivation(Player player) {
+        if (!player.isFallFlying()) {
+            return false;
+        }
+        double clearance = Mth.clamp(ModConfig.INSTANCE.avoidanceClearance, 0.0, 32.0);
+        if (ModConfig.INSTANCE.trajectoryPrediction) {
+            ElytraTrajectory.Result result = ElytraTrajectory.scan(player, player.getXRot(), ElytraTrajectory.MAX_TICKS,
+                    ACTIVATION_LOOKAHEAD, clearance);
+            return !result.collision;
+        }
+        return ObstacleAvoidance.landingPathClearance(player, player.getYRot(), player.getXRot(),
+                ACTIVATION_LOOKAHEAD) >= ACTIVATION_LOOKAHEAD;
     }
 
     /** Height of the terrain at the fly-to destination, when it is known. */

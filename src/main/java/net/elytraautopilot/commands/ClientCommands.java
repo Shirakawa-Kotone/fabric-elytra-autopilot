@@ -64,7 +64,7 @@ public class ClientCommands {
                                             if (minecraftClient.player == null)
                                                 return 0;
                                             if (minecraftClient.player.isFallFlying()) { // If the player is flying
-                                                if (ElytraAutoPilot.groundheight > ModConfig.INSTANCE.minHeight) { // If
+                                                if (ElytraAutoPilot.activationAllowed(minecraftClient.player)) { // If
                                                                                                                     // above
                                                                                                                     // required
                                                                                                                     // height
@@ -265,7 +265,7 @@ public class ClientCommands {
                     return 1;
                 }
 
-                if (ElytraAutoPilot.groundheight <= ModConfig.INSTANCE.minHeight) {
+                if (!ElytraAutoPilot.activationAllowed(minecraftClient.player)) {
                     minecraftClient.player.sendOverlayMessage(Component
                             .translatable("text.elytraautopilot.autoFlightFail.tooLow").withStyle(ChatFormatting.RED));
                     return 1;

@@ -28,6 +28,21 @@ import net.minecraft.world.phys.Vec3;
  * down.
  *
  * <p>
+ * Avoidance works up a ladder when the aircraft is short of energy:
+ *
+ * <ol>
+ * <li>With speed in hand, or whenever a pull-up clears the obstacle, the
+ * aircraft climbs straight away.</li>
+ * <li>When a slow aircraft cannot climb past the obstacle, a pull-up would only
+ * spend the speed it has left, so it dives for speed instead and pulls up by
+ * itself once the speed is back (see {@code avoidanceEnergyAware}).</li>
+ * <li>When no attitude clears the obstacle at all - not on this tick, and not
+ * after {@code avoidanceGiveUpTicks} of trying - avoidance gives up and asks
+ * the autopilot to land, so the aircraft is put down under control instead of
+ * being flown into the terrain (see {@link #consumeLandingRequest()}).</li>
+ * </ol>
+ *
+ * <p>
  * The class only <em>decides</em> what to do; applying the pitch is left to the
  * autopilot so that obstacle avoidance can be layered on top of both the
  * classic and the strategy flight controllers.
@@ -42,6 +57,13 @@ public final class ObstacleAvoidance {
         CLIMB("text.elytraautopilot.hud.avoidance.climb"),
         /** Pitch the nose down. */
         DESCEND("text.elytraautopilot.hud.avoidance.descend"),
+        /** Too slow to climb: dive first to trade height for speed. */
+        DIVE("text.elytraautopilot.hud.avoidance.dive"),
+        /**
+         * Nothing clears the obstacle any more: hand over to the landing controller
+         * instead of flying into it.
+         */
+        LAND("text.elytraautopilot.hud.avoidance.land"),
         /** Boxed in: hold whichever pitch buys the most room. */
         EVADE("text.elytraautopilot.hud.avoidance.evade");
 
@@ -88,6 +110,26 @@ public final class ObstacleAvoidance {
     /** Keep the committed escape unless another one is clearly better. */
     private static final double COMMITMENT_KEEP = 0.85;
     /**
+     * A dive for speed is only flown when it keeps at least this share of the room
+     * the best climb would have. Otherwise the aircraft is better off trading its
+     * last speed forwards than diving into the ground underneath it.
+     */
+    private static final double ENERGY_DIVE_KEEP = 0.6;
+    /**
+     * When nothing clears the obstacle and it is this close, there is no time left
+     * for another attempt: land instead.
+     */
+    private static final double LAST_RESORT_DISTANCE = 16.0;
+    /**
+     * Nothing may keep the aircraft flying for longer than this when avoidance is
+     * asked to give up. Without it an aircraft that merely has to work at staying
+     * clear of rising terrain - but is in no danger - would eventually be landed.
+     */
+    private static final double TRAPPED_DISTANCE = 48.0;
+    /** Bounds for the configured give-up delay, in ticks. */
+    private static final int MIN_GIVE_UP_TICKS = 20;
+    private static final int MAX_GIVE_UP_TICKS = 1200;
+    /**
      * Ticks between escape searches. The engagement test still runs every tick, but
      * a search simulates a dozen attitudes, and the chosen attitude is absolute, so
      * recomputing it a few times a second is plenty.
@@ -119,6 +161,22 @@ public final class ObstacleAvoidance {
     private static boolean active = false;
     private static int holdTicks = 0;
     private static int searchCooldown = 0;
+    /** Speed measured for the current tick, in blocks per tick. */
+    private static double currentSpeed = 0.0;
+    /**
+     * Ticks for which no attitude has been found that gets past the obstacle. Time
+     * spent merely blocked does not count: terrain-following can stay engaged for
+     * minutes, and only being out of options is worth giving up over.
+     */
+    private static int stuckTicks = 0;
+    /** Whether the last search found an attitude that gets past the obstacle. */
+    private static boolean escapeFound = false;
+    /**
+     * How far the best attitude of the last search flies before hitting terrain.
+     */
+    private static double bestEscapeDistance = 0.0;
+    /** Whether the autopilot has been asked to give up and land. */
+    private static boolean landingRequested = false;
 
     private ObstacleAvoidance() {
     }
@@ -160,6 +218,7 @@ public final class ObstacleAvoidance {
             release();
             return;
         }
+        currentSpeed = speed;
 
         double lookahead = Mth.clamp(speed * ModConfig.INSTANCE.avoidanceLookahead * 20.0, MIN_LOOKAHEAD,
                 MAX_LOOKAHEAD);
@@ -207,12 +266,19 @@ public final class ObstacleAvoidance {
      * is safe as well, held for {@link #MIN_HOLD_TICKS}. Releasing earlier makes
      * the normal controller immediately pitch back into the terrain, so the two
      * take turns and the aircraft nods up and down.
+     *
+     * <p>
+     * When nothing gets past the obstacle at all the autopilot is asked to land
+     * (see {@link #consumeLandingRequest()}) - first after a long attempt, and
+     * immediately once the obstacle is too close to try anything else.
      */
     private static void update(float pitch, float normalAttitude, EscapeEvaluator evaluator) {
         Probe current = evaluator.evaluate(pitch);
         boolean blocked = current.hit();
         if (blocked) {
             obstacleDistance = current.travelled();
+        } else {
+            stuckTicks = 0;
         }
 
         if (!blocked) {
@@ -237,12 +303,18 @@ public final class ObstacleAvoidance {
         if (active && action != Action.NONE && --searchCooldown > 0) {
             // Keep the attitude already chosen; a new plan a few times a second is
             // enough and keeps the cost of the search off the frame budget.
+            considerGivingUp();
             return;
         }
         searchCooldown = SEARCH_INTERVAL_TICKS;
         double required = current.travelled() + ESCAPE_MARGIN;
+        escapeFound = false;
+        bestEscapeDistance = 0.0;
         searchEscape(pitch, candidate -> {
             Probe probe = evaluator.evaluate(candidate);
+            if (probe.travelled() > bestEscapeDistance) {
+                bestEscapeDistance = probe.travelled();
+            }
             if (probe.hit()) {
                 return probe.travelled();
             }
@@ -250,6 +322,36 @@ public final class ObstacleAvoidance {
             // the obstacle it is avoiding.
             return probe.travelled() >= required ? CLEAR : probe.travelled();
         });
+        if (escapeFound) {
+            stuckTicks = 0;
+        } else {
+            // A search only runs every few ticks, so charge the whole interval to
+            // the stuck timer: the situation cannot change in between.
+            stuckTicks += SEARCH_INTERVAL_TICKS;
+        }
+        considerGivingUp();
+    }
+
+    /**
+     * Asks the autopilot to land when the obstacle cannot be cleared any more,
+     * rather than holding a pitch that is going to end in the terrain.
+     */
+    private static void considerGivingUp() {
+        if (landingRequested || !ModConfig.INSTANCE.avoidanceGiveUp) {
+            return;
+        }
+        int limit = Mth.clamp(ModConfig.INSTANCE.avoidanceGiveUpTicks, MIN_GIVE_UP_TICKS, MAX_GIVE_UP_TICKS);
+        boolean tooClose = !escapeFound && obstacleDistance > 0.0 && obstacleDistance <= LAST_RESORT_DISTANCE;
+        // Being blocked for a long time is only worth giving up over when nothing
+        // buys any real room either: an aircraft slowly working its way over rising
+        // terrain is in no danger, however long it takes.
+        boolean trapped = !escapeFound && bestEscapeDistance <= TRAPPED_DISTANCE;
+        if (tooClose || (trapped && stuckTicks >= limit)) {
+            landingRequested = true;
+            // Keep holding the current attitude until the autopilot picks the
+            // landing up on this same tick.
+            set(Action.LAND, active ? targetPitch : 0.0f);
+        }
     }
 
     /**
@@ -261,10 +363,21 @@ public final class ObstacleAvoidance {
      * Searching relative to the current pitch makes the target chase itself: every
      * tick the chosen attitude comes out a little steeper than the aircraft already
      * is, so it keeps pulling up until it stalls and the nose never settles.
+     *
+     * <p>
+     * Speed decides what happens when no attitude gets past the obstacle. With
+     * speed in hand the best climb still buys the most room, but a slow pull-up
+     * only spends the speed that is left, so the aircraft dives for speed first and
+     * pulls up once it has it again.
      */
     private static void searchEscape(float currentPitch, EscapeScore score) {
         double maxClimb = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxClimbAngle, 0.0, 85.0);
         double maxDescent = Mth.clamp(ModConfig.INSTANCE.avoidanceMaxDescentAngle, 0.0, 85.0);
+        // Too slow to trade for height: a pull-up would only spend the speed that is
+        // left. See the tie-break below.
+        boolean lowEnergy = ModConfig.INSTANCE.avoidanceEnergyAware
+                && currentSpeed < Mth.clamp(ModConfig.INSTANCE.avoidanceClimbMinSpeed, 0.0, 5.0);
+        Action descentAction = lowEnergy ? Action.DIVE : Action.DESCEND;
 
         // 1) Pull up: shallowest climb first, so the aircraft deviates least.
         double bestClimbPitch = Double.NaN;
@@ -272,6 +385,7 @@ public final class ObstacleAvoidance {
         for (double candidate = -SEARCH_STEP; candidate >= -maxClimb - 1.0e-6; candidate -= SEARCH_STEP) {
             double distance = score.evaluate((float) candidate);
             if (distance == CLEAR) {
+                escapeFound = true;
                 set(Action.CLIMB, candidate);
                 return;
             }
@@ -281,13 +395,15 @@ public final class ObstacleAvoidance {
             }
         }
 
-        // 2) Nothing to climb over (or the ceiling is too low): dive under it.
+        // 2) Nothing to climb over (or the ceiling is too low): dive under it. At
+        // low speed this is also the dive that buys the speed a climb would need.
         double bestDescentPitch = Double.NaN;
         double bestDescentDistance = -1.0;
         for (double candidate = SEARCH_STEP; candidate <= maxDescent + 1.0e-6; candidate += SEARCH_STEP) {
             double distance = score.evaluate((float) candidate);
             if (distance == CLEAR) {
-                set(Action.DESCEND, candidate);
+                escapeFound = true;
+                set(descentAction, candidate);
                 return;
             }
             if (distance > bestDescentDistance) {
@@ -296,21 +412,28 @@ public final class ObstacleAvoidance {
             }
         }
 
-        // 3) Boxed in: keep whatever buys the most room, still preferring a climb.
-        // Stay with the attitude already committed to unless another one is clearly
-        // better, otherwise the escape flickers between candidates every tick and
-        // that shows up as the nose shaking.
+        // 3) Nothing gets past the obstacle. Keep whatever buys the most room, and
+        // stay with the attitude already committed to unless another one is clearly
+        // better - otherwise the escape flickers between candidates every tick and
+        // that shows up as the nose shaking. A slow aircraft dives for speed here:
+        // the climb it cannot finish still costs it the speed it has left.
         double bestPitch = Double.NaN;
         double bestDistance = -1.0;
         Action bestAction = Action.EVADE;
-        if (!Double.isNaN(bestClimbPitch) && bestClimbDistance >= bestDescentDistance) {
+        boolean diveForSpeed = lowEnergy && !Double.isNaN(bestDescentPitch)
+                && bestDescentDistance >= bestClimbDistance * ENERGY_DIVE_KEEP;
+        if (diveForSpeed) {
+            bestPitch = bestDescentPitch;
+            bestDistance = bestDescentDistance;
+            bestAction = Action.DIVE;
+        } else if (!Double.isNaN(bestClimbPitch) && bestClimbDistance >= bestDescentDistance) {
             bestPitch = bestClimbPitch;
             bestDistance = bestClimbDistance;
             bestAction = Action.CLIMB;
         } else if (!Double.isNaN(bestDescentPitch)) {
             bestPitch = bestDescentPitch;
             bestDistance = bestDescentDistance;
-            bestAction = Action.DESCEND;
+            bestAction = descentAction;
         }
 
         if (active && action != Action.NONE && !Double.isNaN(bestPitch)
@@ -439,6 +562,7 @@ public final class ObstacleAvoidance {
     public static void clear() {
         resetOutputs();
         release();
+        landingRequested = false;
     }
 
     /** Clears the per-tick readouts, keeping the engagement and its target. */
@@ -452,8 +576,21 @@ public final class ObstacleAvoidance {
         active = false;
         holdTicks = 0;
         searchCooldown = 0;
+        stuckTicks = 0;
+        escapeFound = false;
+        bestEscapeDistance = 0.0;
         action = Action.NONE;
         targetPitch = 0.0f;
+    }
+
+    /**
+     * Whether obstacle avoidance has run out of options and wants the autopilot to
+     * land. Reading it consumes the request: the autopilot acts on it once.
+     */
+    public static boolean consumeLandingRequest() {
+        boolean requested = landingRequested;
+        landingRequested = false;
+        return requested;
     }
 
     public static boolean isActive() {

@@ -75,6 +75,10 @@ public class ModConfig {
 
     // Trajectory prediction defaults
     public static final boolean trajectoryPredictionDefault = true;
+    public static final boolean showTrajectoryDefault = true;
+    public static final int trajectoryPreviewTicksDefault = 120;
+    public static final int minTrajectoryPreviewTicks = 20;
+    public static final int maxTrajectoryPreviewTicks = 400;
 
     // Obstacle avoidance defaults
     public static final boolean obstacleAvoidanceDefault = true;
@@ -83,6 +87,10 @@ public class ModConfig {
     public static final double avoidanceMaxClimbAngleDefault = 45.0;
     public static final double avoidanceMaxDescentAngleDefault = 35.0;
     public static final double avoidancePitchRateDefault = 3.0;
+    public static final boolean avoidanceEnergyAwareDefault = true;
+    public static final double avoidanceClimbMinSpeedDefault = 1.45;
+    public static final boolean avoidanceGiveUpDefault = true;
+    public static final int avoidanceGiveUpTicksDefault = 200;
     public static final double minAvoidanceLookahead = 0.5;
     public static final double maxAvoidanceLookahead = 30.0;
     public static final double minAvoidanceClearance = 0.5;
@@ -91,7 +99,14 @@ public class ModConfig {
     public static final double maxAvoidanceAngle = 85.0;
     public static final double minAvoidancePitchRate = 0.1;
     public static final double maxAvoidancePitchRate = 15.0;
+    public static final double minAvoidanceClimbSpeed = 0.25;
+    public static final double maxAvoidanceClimbSpeed = 3.0;
+    public static final int minAvoidanceGiveUpTicks = 20;
+    public static final int maxAvoidanceGiveUpTicks = 1200;
     public static final boolean showAvoidanceStatusDefault = true;
+
+    // Dynamic activation defaults
+    public static final boolean dynamicActivationDefault = false;
 
     // Direct landing defaults
     public static final boolean directLandingDefault = true;
@@ -172,12 +187,19 @@ public class ModConfig {
 
     // Obstacle avoidance values
     public boolean trajectoryPrediction = trajectoryPredictionDefault;
+    public boolean showTrajectory = showTrajectoryDefault;
+    public int trajectoryPreviewTicks = trajectoryPreviewTicksDefault;
     public boolean obstacleAvoidance = obstacleAvoidanceDefault;
     public double avoidanceLookahead = avoidanceLookaheadDefault;
     public double avoidanceClearance = avoidanceClearanceDefault;
     public double avoidanceMaxClimbAngle = avoidanceMaxClimbAngleDefault;
     public double avoidanceMaxDescentAngle = avoidanceMaxDescentAngleDefault;
     public double avoidancePitchRate = avoidancePitchRateDefault;
+    public boolean avoidanceEnergyAware = avoidanceEnergyAwareDefault;
+    public double avoidanceClimbMinSpeed = avoidanceClimbMinSpeedDefault;
+    public boolean avoidanceGiveUp = avoidanceGiveUpDefault;
+    public int avoidanceGiveUpTicks = avoidanceGiveUpTicksDefault;
+    public boolean dynamicActivation = dynamicActivationDefault;
 
     // Strategy mode values
     public boolean strategyMode = strategyModeDefault;
@@ -348,6 +370,13 @@ public class ModConfig {
                                 .controller(opt -> IntegerFieldControllerBuilder.create(opt).min(minMinHeight)
                                         .max(maxMinHeight))
                                 .build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.flightprofile.dynamicActivation"))
+                                .description(OptionDescription.of(Component
+                                        .translatable("config.elytraautopilot.flightprofile.dynamicActivation.desc")))
+                                .binding(dynamicActivationDefault, () -> ModConfig.INSTANCE.dynamicActivation,
+                                        newVal -> ModConfig.INSTANCE.dynamicActivation = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
                         .option(Option.<Boolean>createBuilder()
                                 .name(Component.translatable("config.elytraautopilot.flightprofile.autoLanding"))
                                 .description(OptionDescription.of(Component
@@ -538,6 +567,22 @@ public class ModConfig {
                                 .binding(trajectoryPredictionDefault, () -> ModConfig.INSTANCE.trajectoryPrediction,
                                         newVal -> ModConfig.INSTANCE.trajectoryPrediction = newVal)
                                 .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.trajectory.show"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.trajectory.show.desc")))
+                                .binding(showTrajectoryDefault, () -> ModConfig.INSTANCE.showTrajectory,
+                                        newVal -> ModConfig.INSTANCE.showTrajectory = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Integer>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.trajectory.previewTicks"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.trajectory.previewTicks.desc")))
+                                .binding(trajectoryPreviewTicksDefault, () -> ModConfig.INSTANCE.trajectoryPreviewTicks,
+                                        newVal -> ModConfig.INSTANCE.trajectoryPreviewTicks = newVal)
+                                .controller(opt -> IntegerSliderControllerBuilder.create(opt)
+                                        .range(minTrajectoryPreviewTicks, maxTrajectoryPreviewTicks).step(20))
+                                .build())
                         .build())
                 .category(ConfigCategory.createBuilder()
                         .name(Component.translatable("config.elytraautopilot.avoidance"))
@@ -593,6 +638,38 @@ public class ModConfig {
                                         newVal -> ModConfig.INSTANCE.avoidancePitchRate = newVal)
                                 .controller(opt -> DoubleSliderControllerBuilder.create(opt)
                                         .range(minAvoidancePitchRate, maxAvoidancePitchRate).step(0.1))
+                                .build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.energyAware"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.avoidance.energyAware.desc")))
+                                .binding(avoidanceEnergyAwareDefault, () -> ModConfig.INSTANCE.avoidanceEnergyAware,
+                                        newVal -> ModConfig.INSTANCE.avoidanceEnergyAware = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Double>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.climbMinSpeed"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.avoidance.climbMinSpeed.desc")))
+                                .binding(avoidanceClimbMinSpeedDefault, () -> ModConfig.INSTANCE.avoidanceClimbMinSpeed,
+                                        newVal -> ModConfig.INSTANCE.avoidanceClimbMinSpeed = newVal)
+                                .controller(opt -> DoubleSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceClimbSpeed, maxAvoidanceClimbSpeed).step(0.05))
+                                .build())
+                        .option(Option.<Boolean>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.giveUp"))
+                                .description(OptionDescription
+                                        .of(Component.translatable("config.elytraautopilot.avoidance.giveUp.desc")))
+                                .binding(avoidanceGiveUpDefault, () -> ModConfig.INSTANCE.avoidanceGiveUp,
+                                        newVal -> ModConfig.INSTANCE.avoidanceGiveUp = newVal)
+                                .controller(BooleanControllerBuilder::create).build())
+                        .option(Option.<Integer>createBuilder()
+                                .name(Component.translatable("config.elytraautopilot.avoidance.giveUpTicks"))
+                                .description(OptionDescription.of(
+                                        Component.translatable("config.elytraautopilot.avoidance.giveUpTicks.desc")))
+                                .binding(avoidanceGiveUpTicksDefault, () -> ModConfig.INSTANCE.avoidanceGiveUpTicks,
+                                        newVal -> ModConfig.INSTANCE.avoidanceGiveUpTicks = newVal)
+                                .controller(opt -> IntegerSliderControllerBuilder.create(opt)
+                                        .range(minAvoidanceGiveUpTicks, maxAvoidanceGiveUpTicks).step(20))
                                 .build())
                         .build())
                 .category(ConfigCategory.createBuilder().name(Component.translatable("config.elytraautopilot.advanced"))

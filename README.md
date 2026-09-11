@@ -10,6 +10,8 @@ Here is the link to TheMegax's mod page: [https://www.curseforge.com/minecraft/m
 ## How to Use
 Press the assigned key (default "R") while flying at a sufficient altitude to enable 'Auto Flight'. In Auto Flight mode, the mod will adjust your pitch between ascending and descending, resulting in a net altitude gain.
 
+With **Dynamic Activation** enabled (Flight Profile) the minimum altitude is no longer the only way in: if the predicted path ahead is clear the autopilot may also be started below it, which is what makes it usable in high terrain where the ground is close but nothing is actually in the way. The `Needed height` HUD line reports `Ready` in that case too.
+
 To open the config screen and enable Mod Menu, go into the mod menu and open the configuration screen there. 
 
 ## /flyto Command
@@ -37,10 +39,18 @@ Enabled by default under **Trajectory Prediction**. The mod does not extend your
 
 Both systems below use that prediction. Turning the option off falls back to the simpler ray/geometric behaviour.
 
+The predicted path is also drawn in the world while you are flying (**Show Predicted Trajectory**, on by default). The line starts at the aircraft, follows exactly the path the movement model produces for the attitude being commanded, and fades towards red where it ends in terrain - so you can see the problem before the aircraft has to do anything about it. While obstacle avoidance owns the pitch the line shows the escape attitude it picked, and **Trajectory Preview Length** controls how far ahead it is drawn. The line is depth tested, so it disappears behind a hill exactly where the aircraft would.
+
 ### Obstacle Avoidance
 Enabled by default and configurable under **Obstacle Avoidance** in the config screen. While Auto Flight is running the mod flies the predicted path ahead (5 seconds of flight by default) and, if it ends in terrain, searches for an escape attitude by simulating each candidate with the same model. It pitches the nose **up** towards the shallowest climb that actually clears the obstacle; if there is nothing to climb over - for example underneath a Nether ceiling - it pitches the nose **down** instead. The HUD shows what it is doing (`Avoiding terrain: climbing (74 blocks ahead)`).
 
-Note that a pitch-only escape is limited by physics: from cruise speed an elytra cannot climb very steeply without first trading speed for height, so a wall that rears up immediately in front may be unavoidable by pitching alone.
+When the aircraft is short of speed, avoidance works up a ladder instead of just holding the steepest climb:
+
+1. **Enough speed, or a pull-up actually clears** - climb straight away.
+2. **Too slow to climb and no climb clears** - dive for speed (`diving for speed` in the HUD) and pull up by itself once the speed is back. A slow pull-up only spends the last of the energy the aircraft has, and this is the same dive-then-climb trade the precomputed climb waveform uses. Turning off **Speed-aware Avoidance** restores the old behaviour of always trying to climb.
+3. **Nothing gets past the obstacle at all** - avoidance gives up and puts the aircraft on the ground under control (`No way past the terrain - landing!`) rather than flying it into the wall. This happens immediately when the obstacle is only a few blocks away, or after **Avoidance Give-up Time** (10 s by default) of having no attitude that buys any real room. **Land When Trapped** turns it off.
+
+Note that a pitch-only escape is limited by physics: from cruise speed an elytra cannot climb very steeply without first trading speed for height, so a wall that rears up immediately in front may be unavoidable by pitching alone. Step 2 gets much closer to it, but a turn would be the real answer; there is no yaw-based avoidance.
 
 ### Landing
 `/flyto` and `/land` normally lose height by circling around the target. With **Direct Landing** enabled (default) the mod instead checks whether the destination can be reached in a straight line: the required descent angle has to be within the configured glide/max angle, there has to be enough horizontal room, and the predicted approach must not run into terrain. If all of that holds, the aircraft flies straight in and flares shortly before touchdown.
